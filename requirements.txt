@@ -40,6 +40,8 @@ propcache==0.5.2
     #   yarl
 python-dateutil==2.9.0.post0
     # via kubernetes
+python-dotenv==1.2.2
+    # via istio-crds (pyproject.toml)
 pytz==2026.2
     # via neo4j
 pyyaml==6.0.3
