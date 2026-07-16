@@ -65,6 +65,14 @@ class NamespaceInfo:
     labels: dict[str, str] = field(default_factory=dict)
 
 
+def _namespace_info(ns: V1Namespace) -> NamespaceInfo:
+    meta = ns.metadata
+    return NamespaceInfo(
+        name=meta.name if meta and meta.name else "",
+        labels=dict(meta.labels or {}) if meta else {},
+    )
+
+
 def get_namespaces(namespace: str | None = None) -> list[NamespaceInfo]:
     """List Kubernetes namespaces including their labels, optionally restricted
     to a single namespace.
@@ -82,15 +90,10 @@ def get_namespaces(namespace: str | None = None) -> list[NamespaceInfo]:
     """
     v1 = client.CoreV1Api()
     if namespace is not None:
-        ns = cast(
-            V1Namespace, v1.read_namespace(namespace, _request_timeout=_REQUEST_TIMEOUT),
-        )
-        return [NamespaceInfo(name=ns.metadata.name, labels=dict(ns.metadata.labels or {}))]
+        ns = cast(V1Namespace, v1.read_namespace(namespace, _request_timeout=_REQUEST_TIMEOUT))
+        return [_namespace_info(ns)]
     ns_list = cast(V1NamespaceList, v1.list_namespace(_request_timeout=_REQUEST_TIMEOUT))
-    return [
-        NamespaceInfo(name=ns.metadata.name, labels=dict(ns.metadata.labels or {}))
-        for ns in (ns_list.items or [])
-    ]
+    return [_namespace_info(ns) for ns in (ns_list.items or [])]
 
 
 # ---------------------------------------------------------------------------
@@ -278,12 +281,12 @@ class NetworkPolicyInfo:
 
 
 def _network_policy_peer(peer: Any) -> NetworkPolicyPeer:
+    pod_selector = getattr(peer, "pod_selector", None)
+    namespace_selector = getattr(peer, "namespace_selector", None)
     ip_block = getattr(peer, "ip_block", None)
     return NetworkPolicyPeer(
-        pod_selector=dict((getattr(peer, "pod_selector", None) or {}).match_labels or {})
-        if getattr(peer, "pod_selector", None) else {},
-        namespace_selector=dict((getattr(peer, "namespace_selector", None) or {}).match_labels or {})
-        if getattr(peer, "namespace_selector", None) else {},
+        pod_selector=dict(pod_selector.match_labels or {}) if pod_selector else {},
+        namespace_selector=dict(namespace_selector.match_labels or {}) if namespace_selector else {},
         ip_block_cidr=getattr(ip_block, "cidr", None) if ip_block else None,
     )
 
@@ -335,7 +338,7 @@ def get_network_policies(namespace: str | None = None) -> list[NetworkPolicyInfo
         result.append(NetworkPolicyInfo(
             name=np.metadata.name,
             namespace=np.metadata.namespace,
-            pod_selector=dict((spec.pod_selector or {}).match_labels or {}) if spec.pod_selector else {},
+            pod_selector=dict(spec.pod_selector.match_labels or {}) if spec.pod_selector else {},
             policy_types=list(spec.policy_types or []),
             ingress=ingress,
             egress=egress,
