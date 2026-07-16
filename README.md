@@ -21,9 +21,10 @@ nicht erreichbare/ungesunde CRDs.
 
 | Datei | Zweck |
 |---|---|
-| [main.py](main.py) | CLI-Einstiegspunkt (Argument-Parsing, Tabellenausgabe) |
-| [kubectl.py](kubectl.py) | Generische Kubernetes-Datenerfassung: Namespaces, Services, ServiceAccounts, Pods, CRD-Auflistung mit Versionen |
-| [istio.py](istio.py) | Parser für die Istio-CRDs selbst (VirtualService, DestinationRule, Gateway, ServiceEntry, Sidecar, WorkloadEntry, WorkloadGroup, PeerAuthentication, AuthorizationPolicy, RequestAuthentication) in strukturierte Dataclasses — aktuell noch nicht an die CLI angebunden, für eine künftige Traffic-/Policy-Graph-Auswertung vorbereitet |
+| [main.py](main.py) | CLI-Einstiegspunkt (Argument-Parsing, Tabellenausgabe) für die CRD-Übersicht |
+| [istio-objekt-liste.py](istio-objekt-liste.py) | CLI-Einstiegspunkt, der alle gesammelten Kubernetes-/Istio-Objekte als ein flaches JSON-Dokument ausgibt |
+| [kubectl.py](kubectl.py) | Generische Kubernetes-Datenerfassung: Namespaces (inkl. Labels), Services, ServiceAccounts, Pods, Mesh-Root-Namespace, CRD-Auflistung mit Versionen |
+| [istio.py](istio.py) | Parser für die Istio-CRDs selbst (VirtualService, DestinationRule, Gateway, ServiceEntry, Sidecar, WorkloadEntry, WorkloadGroup, PeerAuthentication, AuthorizationPolicy, RequestAuthentication) in strukturierte Dataclasses — für eine künftige Traffic-/Policy-Graph-Auswertung vorbereitet |
 
 ## Installation
 
@@ -77,6 +78,35 @@ Gegen einen Cluster mit selbstsigniertem Zertifikat, mit Debug-Ausgabe:
 
 ```bash
 python3 main.py --insecure-skip-tls-verify -v
+```
+
+### istio-objekt-liste.py
+
+Gibt alle gesammelten Kubernetes-/Istio-Objekte (Namespaces, Services,
+ServiceAccounts, Pods sowie alle Istio-CRDs) als ein flaches JSON-Dokument
+aus. Nimmt dieselben Optionen wie `main.py` entgegen.
+
+```bash
+python3 istio-objekt-liste.py [-n NAMESPACE] [--insecure-skip-tls-verify] [-v]
+```
+
+Alle Objekte im gesamten Cluster als JSON:
+
+```bash
+python3 istio-objekt-liste.py
+```
+
+Nur Objekte aus einem Namespace:
+
+```bash
+python3 istio-objekt-liste.py -n istio-system
+```
+
+Gegen einen Cluster mit selbstsigniertem Zertifikat, mit Debug-Ausgabe,
+Ausgabe in eine Datei umgeleitet:
+
+```bash
+python3 istio-objekt-liste.py --insecure-skip-tls-verify -v > objekte.json
 ```
 
 ## Lizenz
