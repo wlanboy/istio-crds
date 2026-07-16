@@ -13,6 +13,7 @@ from kubernetes.client import (
     V1CustomResourceDefinitionList,
     V1Namespace,
     V1NamespaceList,
+    V1NetworkPolicyList,
     V1PodList,
     V1ServiceAccountList,
     V1ServiceList,
@@ -240,6 +241,106 @@ def get_pods(namespace: str | None = None) -> list[PodInfo]:
         )
         for pod in (pod_list.items or [])
     ]
+
+
+# ---------------------------------------------------------------------------
+# NetworkPolicy listing
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NetworkPolicyPeer:
+    pod_selector: dict[str, str] = field(default_factory=dict)
+    namespace_selector: dict[str, str] = field(default_factory=dict)
+    ip_block_cidr: str | None = None
+
+
+@dataclass
+class NetworkPolicyPort:
+    protocol: str | None = None
+    port: str | None = None
+    end_port: int | None = None
+
+
+@dataclass
+class NetworkPolicyRule:
+    peers: list[NetworkPolicyPeer] = field(default_factory=list)
+    ports: list[NetworkPolicyPort] = field(default_factory=list)
+
+
+@dataclass
+class NetworkPolicyInfo:
+    name: str
+    namespace: str
+    pod_selector: dict[str, str] = field(default_factory=dict)
+    policy_types: list[str] = field(default_factory=list)
+    ingress: list[NetworkPolicyRule] = field(default_factory=list)
+    egress: list[NetworkPolicyRule] = field(default_factory=list)
+
+
+def _network_policy_peer(peer: Any) -> NetworkPolicyPeer:
+    ip_block = getattr(peer, "ip_block", None)
+    return NetworkPolicyPeer(
+        pod_selector=dict((getattr(peer, "pod_selector", None) or {}).match_labels or {})
+        if getattr(peer, "pod_selector", None) else {},
+        namespace_selector=dict((getattr(peer, "namespace_selector", None) or {}).match_labels or {})
+        if getattr(peer, "namespace_selector", None) else {},
+        ip_block_cidr=getattr(ip_block, "cidr", None) if ip_block else None,
+    )
+
+
+def _network_policy_port(port: Any) -> NetworkPolicyPort:
+    return NetworkPolicyPort(
+        protocol=getattr(port, "protocol", None),
+        port=str(getattr(port, "port", None)) if getattr(port, "port", None) is not None else None,
+        end_port=getattr(port, "end_port", None),
+    )
+
+
+def get_network_policies(namespace: str | None = None) -> list[NetworkPolicyInfo]:
+    """List Kubernetes NetworkPolicies, optionally restricted to one namespace.
+
+    NetworkPolicies gate L3/L4 traffic independently of and beneath Istio's
+    AuthorizationPolicy/Sidecar layer — a pod-to-pod edge the Istio config
+    otherwise allows can still be dropped here, so this is required input for
+    the "which edges are actually allowed" step of the traffic graph.
+    """
+    net = client.NetworkingV1Api()
+    if namespace is not None:
+        np_list = cast(
+            V1NetworkPolicyList,
+            net.list_namespaced_network_policy(namespace, _request_timeout=_REQUEST_TIMEOUT),
+        )
+    else:
+        np_list = cast(
+            V1NetworkPolicyList,
+            net.list_network_policy_for_all_namespaces(_request_timeout=_REQUEST_TIMEOUT),
+        )
+    result: list[NetworkPolicyInfo] = []
+    for np in (np_list.items or []):
+        spec = np.spec
+        ingress = [
+            NetworkPolicyRule(
+                peers=[_network_policy_peer(p) for p in (getattr(rule, "_from", None) or [])],
+                ports=[_network_policy_port(p) for p in (rule.ports or [])],
+            )
+            for rule in (getattr(spec, "ingress", None) or [])
+        ]
+        egress = [
+            NetworkPolicyRule(
+                peers=[_network_policy_peer(p) for p in (rule.to or [])],
+                ports=[_network_policy_port(p) for p in (rule.ports or [])],
+            )
+            for rule in (getattr(spec, "egress", None) or [])
+        ]
+        result.append(NetworkPolicyInfo(
+            name=np.metadata.name,
+            namespace=np.metadata.namespace,
+            pod_selector=dict((spec.pod_selector or {}).match_labels or {}) if spec.pod_selector else {},
+            policy_types=list(spec.policy_types or []),
+            ingress=ingress,
+            egress=egress,
+        ))
+    return result
 
 
 # ---------------------------------------------------------------------------

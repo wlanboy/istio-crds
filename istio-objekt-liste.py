@@ -15,6 +15,7 @@ from istio import get_hosts, get_istio_resources
 from kubectl import (
     get_mesh_root_namespace,
     get_namespaces,
+    get_network_policies,
     get_pods,
     get_service_accounts,
     get_services,
@@ -30,6 +31,7 @@ def _collect(namespace: str | None) -> dict[str, object]:
         "services": [dataclasses.asdict(s) for s in get_services(namespace=namespace)],
         "service_accounts": [dataclasses.asdict(sa) for sa in get_service_accounts(namespace=namespace)],
         "pods": [dataclasses.asdict(p) for p in get_pods(namespace=namespace)],
+        "network_policies": [dataclasses.asdict(np) for np in get_network_policies(namespace=namespace)],
         "hosts": [dataclasses.asdict(h) for h in get_hosts(resources)],
         "virtual_services": [dataclasses.asdict(o) for o in resources.virtual_services],
         "destination_rules": [dataclasses.asdict(o) for o in resources.destination_rules],
