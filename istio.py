@@ -211,6 +211,68 @@ class IstioResources:
     request_authentications: list[RequestAuthenticationInfo] = field(default_factory=list)
 
 
+@dataclass
+class HostRef:
+    kind: str  # e.g. "VirtualService.hosts", "Gateway.server", "ServiceEntry.hosts"
+    name: str
+    namespace: str
+
+
+@dataclass
+class HostInfo:
+    host: str
+    referenced_by: list[HostRef] = field(default_factory=list)
+
+
+def get_hosts(resources: IstioResources) -> list[HostInfo]:
+    """Collect every distinct host string referenced anywhere across the given
+    Istio resources — VirtualService hosts/route destinations, DestinationRule
+    host, Gateway server hosts, ServiceEntry hosts, Sidecar egress hosts, and
+    AuthorizationPolicy ``to.operation.hosts`` — each annotated with the
+    objects that reference it.
+
+    This is the node list a future traffic graph needs a Service/host isn't
+    otherwise listed as a first-class object anywhere else in the output.
+    """
+    hosts: dict[str, HostInfo] = {}
+
+    def add(host: str | None, kind: str, name: str, namespace: str) -> None:
+        if not host:
+            return
+        hosts.setdefault(host, HostInfo(host=host)).referenced_by.append(
+            HostRef(kind=kind, name=name, namespace=namespace)
+        )
+
+    for vs in resources.virtual_services:
+        for host in vs.hosts:
+            add(host, "VirtualService.hosts", vs.name, vs.namespace)
+        for dest in vs.destinations:
+            add(dest.host, "VirtualService.destination", vs.name, vs.namespace)
+
+    for dr in resources.destination_rules:
+        add(dr.host, "DestinationRule.host", dr.name, dr.namespace)
+
+    for gw in resources.gateways:
+        for server in gw.servers:
+            for host in server.hosts:
+                add(host, "Gateway.server", gw.name, gw.namespace)
+
+    for se in resources.service_entries:
+        for host in se.hosts:
+            add(host, "ServiceEntry.hosts", se.name, se.namespace)
+
+    for sc in resources.sidecars:
+        for host in sc.egress_hosts:
+            add(host, "Sidecar.egress", sc.name, sc.namespace)
+
+    for ap in resources.authorization_policies:
+        for rule in ap.rules:
+            for host in rule.to_hosts:
+                add(host, "AuthorizationPolicy.to_hosts", ap.name, ap.namespace)
+
+    return sorted(hosts.values(), key=lambda h: h.host)
+
+
 # ---------------------------------------------------------------------------
 # Parsing (raw dict, as returned by CustomObjectsApi, -> dataclass)
 # ---------------------------------------------------------------------------
