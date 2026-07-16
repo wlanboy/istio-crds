@@ -179,10 +179,13 @@ class AuthorizationPolicyInfo:
     name: str
     namespace: str
     action: str
-    has_selector: bool
     rules: list[AuthorizationRule] = field(default_factory=list)
     target_refs: list[TargetRef] = field(default_factory=list)
     selector: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def has_selector(self) -> bool:
+        return bool(self.selector or self.target_refs)
 
 
 @dataclass
@@ -420,7 +423,6 @@ def _parse_authorization_policy(item: dict[str, Any]) -> AuthorizationPolicyInfo
     selector = dict((spec.get("selector") or {}).get("matchLabels") or {})
     return AuthorizationPolicyInfo(
         name=name, namespace=namespace, action=spec.get("action") or "ALLOW",
-        has_selector=bool(spec.get("selector") or raw_refs),
         rules=rules,
         target_refs=target_refs,
         selector=selector,
