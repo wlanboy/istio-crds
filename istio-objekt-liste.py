@@ -11,7 +11,7 @@ import urllib3
 from kubernetes.client.rest import ApiException
 from kubernetes.config import ConfigException
 
-from istio import get_istio_resources
+from istio import get_hosts, get_istio_resources
 from kubectl import (
     get_mesh_root_namespace,
     get_namespaces,
@@ -30,6 +30,7 @@ def _collect(namespace: str | None) -> dict[str, object]:
         "services": [dataclasses.asdict(s) for s in get_services(namespace=namespace)],
         "service_accounts": [dataclasses.asdict(sa) for sa in get_service_accounts(namespace=namespace)],
         "pods": [dataclasses.asdict(p) for p in get_pods(namespace=namespace)],
+        "hosts": [dataclasses.asdict(h) for h in get_hosts(resources)],
         "virtual_services": [dataclasses.asdict(o) for o in resources.virtual_services],
         "destination_rules": [dataclasses.asdict(o) for o in resources.destination_rules],
         "gateways": [dataclasses.asdict(o) for o in resources.gateways],
