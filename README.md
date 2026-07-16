@@ -1,11 +1,10 @@
 # istio-crds
 
 Kommandozeilen-Tool, das alle in einem Kubernetes-Cluster installierten
-**Istio-CRDs** (Gruppe `*.istio.io`) auflistet — mit jeder API-Version und,
-pro Version, der Instanzanzahl je Namespace. Zusätzlich werden potenzielle
-Cluster-Probleme rund um diese CRDs erkannt: veraltete API-Versionen,
-ausstehende Storage-Version-Migrationen, nicht erreichbare/ungesunde CRDs
-sowie Conversion-Webhook-Ziele.
+**Istio-CRDs** (Gruppe `*.istio.io`) mit jeder API-Version auflistet.
+Zusätzlich werden potenzielle Cluster-Probleme rund um diese CRDs erkannt:
+veraltete API-Versionen, ausstehende Storage-Version-Migrationen sowie
+nicht erreichbare/ungesunde CRDs.
 
 ## Funktionsumfang
 
@@ -17,16 +16,13 @@ sowie Conversion-Webhook-Ziele.
     (`status.storedVersions` enthält mehr als die aktuelle Storage-Version)
   - **ungesunden CRDs** (Status-Conditions `Established`/`NamesAccepted` sind
     `False`)
-  - **Fetch-Fehlern** je Version/Namespace, wenn eine Instanzanzahl nicht
-    ermittelt werden konnte (z. B. Timeout), damit "0 Instanzen" nicht mit
-    "Anzahl unbekannt" verwechselt wird
 
 ## Projektstruktur
 
 | Datei | Zweck |
 |---|---|
 | [main.py](main.py) | CLI-Einstiegspunkt (Argument-Parsing, Tabellenausgabe) |
-| [kubectl.py](kubectl.py) | Generische Kubernetes-Datenerfassung: Namespaces, Services, CRD-Auflistung mit Versionen/Instanzzählung |
+| [kubectl.py](kubectl.py) | Generische Kubernetes-Datenerfassung: Namespaces, Services, CRD-Auflistung mit Versionen |
 | [istio.py](istio.py) | Parser für die Istio-CRDs selbst (VirtualService, DestinationRule, Gateway, ServiceEntry, Sidecar, WorkloadEntry, WorkloadGroup, PeerAuthentication, AuthorizationPolicy, RequestAuthentication) in strukturierte Dataclasses — aktuell noch nicht an die CLI angebunden, für eine künftige Traffic-/Policy-Graph-Auswertung vorbereitet |
 
 ## Installation
@@ -59,7 +55,7 @@ python3 main.py [-n NAMESPACE] [--insecure-skip-tls-verify] [-v]
 
 | Option | Beschreibung |
 |---|---|
-| `-n`, `--namespace` | Nur diesen Namespace untersuchen (Default: alle Namespaces; cluster-scoped CRDs werden nur angezeigt, wenn diese Option weggelassen wird). |
+| `-n`, `--namespace` | Nur namespaced CRDs anzeigen (cluster-scoped CRDs werden nur angezeigt, wenn diese Option weggelassen wird). |
 | `--insecure-skip-tls-verify` | TLS-Zertifikatsprüfung gegenüber dem API-Server deaktivieren (entspricht `kubectl`/`oc --insecure-skip-tls-verify`) — z. B. bei selbstsignierten Zertifikaten in Testclustern. |
 | `-v`, `--verbose` | Debug-Logging aktivieren, u. a. für übersprungene API-Aufrufe. |
 
@@ -71,7 +67,7 @@ Alle Istio-CRDs im gesamten Cluster:
 python3 main.py
 ```
 
-Nur einen Namespace prüfen:
+Nur namespaced CRDs anzeigen (cluster-scoped CRDs ausblenden):
 
 ```bash
 python3 main.py -n istio-system
