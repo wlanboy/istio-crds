@@ -23,6 +23,7 @@ nicht erreichbare/ungesunde CRDs.
 |---|---|
 | [main.py](main.py) | CLI-Einstiegspunkt (Argument-Parsing, Tabellenausgabe) für die CRD-Übersicht |
 | [istio-objekt-liste.py](istio-objekt-liste.py) | CLI-Einstiegspunkt, der alle gesammelten Kubernetes-/Istio-Objekte als ein flaches JSON-Dokument ausgibt |
+| [istio-graph.py](istio-graph.py) | CLI-Einstiegspunkt, der aus denselben Objekten einen JSON-Abhängigkeitsgraphen (Knoten + Kanten) baut |
 | [kubectl.py](kubectl.py) | Generische Kubernetes-Datenerfassung: Namespaces (inkl. Labels), Services, ServiceAccounts, Pods, Mesh-Root-Namespace, CRD-Auflistung mit Versionen |
 | [istio.py](istio.py) | Parser für die Istio-CRDs selbst (VirtualService, DestinationRule, Gateway, ServiceEntry, Sidecar, WorkloadEntry, WorkloadGroup, PeerAuthentication, AuthorizationPolicy, RequestAuthentication) in strukturierte Dataclasses — für eine künftige Traffic-/Policy-Graph-Auswertung vorbereitet |
 
@@ -107,6 +108,33 @@ Ausgabe in eine Datei umgeleitet:
 
 ```bash
 python3 istio-objekt-liste.py --insecure-skip-tls-verify -v > objekte.json
+```
+
+### istio-graph.py
+
+Baut aus denselben Objekten einen JSON-Abhängigkeitsgraphen (`{"nodes": [...],
+"edges": [...]}`). Label-Selektoren (Service→Pod, Gateway/Sidecar/
+PeerAuthentication/AuthorizationPolicy/RequestAuthentication/NetworkPolicy→
+Pod bzw. Namespace), Host-Strings (VirtualService/DestinationRule/Gateway/
+ServiceEntry/Sidecar→Host, Host→Service) sowie SPIFFE-Principals
+(AuthorizationPolicy→ServiceAccount) und `targetRef`s werden dabei zu
+konkreten Kanten aufgelöst. Nimmt dieselben Optionen wie `main.py` entgegen.
+
+```bash
+python3 istio-graph.py [-n NAMESPACE] [--insecure-skip-tls-verify] [-v]
+```
+
+Abhängigkeitsgraph des gesamten Clusters als JSON:
+
+```bash
+python3 istio-graph.py > graph.json
+```
+
+Nur ein Namespace, mit Debug-Ausgabe für nicht auflösbare Kanten
+(z. B. ein Host ohne passenden Service):
+
+```bash
+python3 istio-graph.py -n default -v > graph.json
 ```
 
 ## Lizenz
