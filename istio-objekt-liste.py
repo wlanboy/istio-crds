@@ -26,7 +26,7 @@ def _collect(namespace: str | None) -> dict[str, object]:
     resources = get_istio_resources(namespace=namespace)
     return {
         "mesh_root_namespace": get_mesh_root_namespace(),
-        "namespaces": [dataclasses.asdict(n) for n in get_namespaces()],
+        "namespaces": [dataclasses.asdict(n) for n in get_namespaces(namespace=namespace)],
         "services": [dataclasses.asdict(s) for s in get_services(namespace=namespace)],
         "service_accounts": [dataclasses.asdict(sa) for sa in get_service_accounts(namespace=namespace)],
         "pods": [dataclasses.asdict(p) for p in get_pods(namespace=namespace)],

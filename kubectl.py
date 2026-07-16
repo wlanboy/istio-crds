@@ -11,6 +11,7 @@ from kubernetes import client, config
 from kubernetes.client import (
     V1ConfigMap,
     V1CustomResourceDefinitionList,
+    V1Namespace,
     V1NamespaceList,
     V1PodList,
     V1ServiceAccountList,
@@ -63,15 +64,27 @@ class NamespaceInfo:
     labels: dict[str, str] = field(default_factory=dict)
 
 
-def get_namespaces() -> list[NamespaceInfo]:
-    """List Kubernetes namespaces including their labels.
+def get_namespaces(namespace: str | None = None) -> list[NamespaceInfo]:
+    """List Kubernetes namespaces including their labels, optionally restricted
+    to a single namespace.
 
     Labels (e.g. ``istio-injection: enabled``, ``istio.io/rev``) are what
     determine whether a namespace's pods actually get a sidecar and are part
     of the mesh in the first place — a namespace-scoped policy targeting a
     namespace without one of these labels never actually applies to anything.
+
+    Listing all namespaces (``namespace=None``) requires cluster-scoped
+    ``list namespaces`` RBAC. If ``namespace`` is given, only that namespace
+    is read via ``read_namespace()`` instead — a ``get`` on ``namespaces``
+    scoped to that one name (e.g. via ``resourceNames``) is enough for that,
+    without needing to list every namespace in the cluster.
     """
     v1 = client.CoreV1Api()
+    if namespace is not None:
+        ns = cast(
+            V1Namespace, v1.read_namespace(namespace, _request_timeout=_REQUEST_TIMEOUT),
+        )
+        return [NamespaceInfo(name=ns.metadata.name, labels=dict(ns.metadata.labels or {}))]
     ns_list = cast(V1NamespaceList, v1.list_namespace(_request_timeout=_REQUEST_TIMEOUT))
     return [
         NamespaceInfo(name=ns.metadata.name, labels=dict(ns.metadata.labels or {}))
