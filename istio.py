@@ -50,6 +50,13 @@ class VirtualServiceInfo:
     gateways: list[str] = field(default_factory=list)
     destinations: list[RouteDestination] = field(default_factory=list)
     delegates: list[DelegateRef] = field(default_factory=list)
+    export_to: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Subset:
+    name: str
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -57,8 +64,9 @@ class DestinationRuleInfo:
     name: str
     namespace: str
     host: str
-    subsets: list[str] = field(default_factory=list)
+    subsets: list[Subset] = field(default_factory=list)
     tls_mode: str | None = None
+    export_to: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -104,6 +112,8 @@ class ServiceEntryInfo:
     resolution: str | None = None
     ports: list[int] = field(default_factory=list)
     endpoints: list[ServiceEntryEndpoint] = field(default_factory=list)
+    workload_selector: dict[str, str] = field(default_factory=dict)
+    export_to: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -119,6 +129,7 @@ class SidecarInfo:
     namespace: str
     egress_hosts: list[str] = field(default_factory=list)
     ingress: list[SidecarIngressRule] = field(default_factory=list)
+    workload_selector: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -145,7 +156,7 @@ class PeerAuthenticationInfo:
     name: str
     namespace: str
     mtls_mode: str | None
-    has_selector: bool
+    selector: dict[str, str] = field(default_factory=dict)
     port_level_mtls: dict[str, str] = field(default_factory=dict)
 
 
@@ -179,7 +190,8 @@ class RequestAuthenticationInfo:
     name: str
     namespace: str
     issuers: list[str] = field(default_factory=list)
-    has_selector: bool = False
+    selector: dict[str, str] = field(default_factory=dict)
+    target_refs: list[TargetRef] = field(default_factory=list)
 
 
 @dataclass
@@ -259,17 +271,22 @@ def _parse_virtual_service(item: dict[str, Any]) -> VirtualServiceInfo:
         gateways=list(spec.get("gateways") or []),
         destinations=destinations,
         delegates=delegates,
+        export_to=list(spec.get("exportTo") or []),
     )
 
 
 def _parse_destination_rule(item: dict[str, Any]) -> DestinationRuleInfo:
     name, namespace = _meta(item)
     spec = item.get("spec") or {}
-    subsets = [s["name"] for s in (spec.get("subsets") or []) if s.get("name")]
+    subsets = [
+        Subset(name=s["name"], labels=dict(s.get("labels") or {}))
+        for s in (spec.get("subsets") or []) if s.get("name")
+    ]
     tls_mode = ((spec.get("trafficPolicy") or {}).get("tls") or {}).get("mode")
     return DestinationRuleInfo(
         name=name, namespace=namespace, host=spec.get("host", ""),
         subsets=subsets, tls_mode=tls_mode,
+        export_to=list(spec.get("exportTo") or []),
     )
 
 
@@ -307,6 +324,8 @@ def _parse_service_entry(item: dict[str, Any]) -> ServiceEntryInfo:
         name=name, namespace=namespace, hosts=list(spec.get("hosts") or []),
         location=spec.get("location"), resolution=spec.get("resolution"), ports=ports,
         endpoints=endpoints,
+        workload_selector=dict((spec.get("workloadSelector") or {}).get("labels") or {}),
+        export_to=list(spec.get("exportTo") or []),
     )
 
 
@@ -326,7 +345,11 @@ def _parse_sidecar(item: dict[str, Any]) -> SidecarInfo:
         )
         for ing in (spec.get("ingress") or [])
     ]
-    return SidecarInfo(name=name, namespace=namespace, egress_hosts=egress_hosts, ingress=ingress)
+    workload_selector = dict((spec.get("workloadSelector") or {}).get("labels") or {})
+    return SidecarInfo(
+        name=name, namespace=namespace, egress_hosts=egress_hosts, ingress=ingress,
+        workload_selector=workload_selector,
+    )
 
 
 def _parse_workload_entry(item: dict[str, Any]) -> WorkloadEntryInfo:
@@ -361,7 +384,7 @@ def _parse_peer_authentication(item: dict[str, Any]) -> PeerAuthenticationInfo:
     return PeerAuthenticationInfo(
         name=name, namespace=namespace,
         mtls_mode=(spec.get("mtls") or {}).get("mode"),
-        has_selector=bool(spec.get("selector")),
+        selector=dict((spec.get("selector") or {}).get("matchLabels") or {}),
         port_level_mtls=port_level_mtls,
     )
 
@@ -408,9 +431,16 @@ def _parse_request_authentication(item: dict[str, Any]) -> RequestAuthentication
     name, namespace = _meta(item)
     spec = item.get("spec") or {}
     issuers = [j["issuer"] for j in (spec.get("jwtRules") or []) if j.get("issuer")]
+    raw_refs = [spec["targetRef"]] if spec.get("targetRef") else []
+    raw_refs += spec.get("targetRefs") or []
+    target_refs = [
+        TargetRef(kind=r.get("kind", ""), name=r["name"], group=r.get("group") or None)
+        for r in raw_refs if r.get("name")
+    ]
     return RequestAuthenticationInfo(
         name=name, namespace=namespace, issuers=issuers,
-        has_selector=bool(spec.get("selector") or spec.get("targetRefs")),
+        selector=dict((spec.get("selector") or {}).get("matchLabels") or {}),
+        target_refs=target_refs,
     )
 
 
