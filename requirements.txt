@@ -30,6 +30,8 @@ multidict==6.7.1
     # via
     #   aiohttp
     #   yarl
+neo4j==6.2.0
+    # via istio-crds (pyproject.toml)
 oauthlib==3.3.1
     # via requests-oauthlib
 propcache==0.5.2
@@ -38,6 +40,8 @@ propcache==0.5.2
     #   yarl
 python-dateutil==2.9.0.post0
     # via kubernetes
+pytz==2026.2
+    # via neo4j
 pyyaml==6.0.3
     # via kubernetes
 requests==2.34.2
