@@ -10,6 +10,8 @@ from kubernetes import client, config
 from kubernetes.client import (
     V1CustomResourceDefinitionList,
     V1NamespaceList,
+    V1PodList,
+    V1ServiceAccountList,
     V1ServiceList,
 )
 
@@ -93,6 +95,80 @@ def get_services(namespace: str | None = None) -> list[ServiceInfo]:
             selector=dict(svc.spec.selector or {}) if svc.spec else {},
         )
         for svc in (svc_list.items or [])
+    ]
+
+
+# ---------------------------------------------------------------------------
+# ServiceAccount listing
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ServiceAccountInfo:
+    name: str
+    namespace: str
+
+
+def get_service_accounts(namespace: str | None = None) -> list[ServiceAccountInfo]:
+    """List Kubernetes ServiceAccounts, optionally restricted to one namespace.
+
+    Used to resolve the SPIFFE principals referenced by
+    AuthorizationPolicy.rules[].from.source.principals and the serviceAccount
+    fields on WorkloadEntry/WorkloadGroup/Pod to actual cluster objects.
+    """
+    v1 = client.CoreV1Api()
+    if namespace is not None:
+        sa_list = cast(
+            V1ServiceAccountList,
+            v1.list_namespaced_service_account(namespace, _request_timeout=_REQUEST_TIMEOUT),
+        )
+    else:
+        sa_list = cast(
+            V1ServiceAccountList,
+            v1.list_service_account_for_all_namespaces(_request_timeout=_REQUEST_TIMEOUT),
+        )
+    return [
+        ServiceAccountInfo(name=sa.metadata.name, namespace=sa.metadata.namespace)
+        for sa in (sa_list.items or [])
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Pod listing
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PodInfo:
+    name: str
+    namespace: str
+    labels: dict[str, str] = field(default_factory=dict)
+    service_account: str | None = None
+
+
+def get_pods(namespace: str | None = None) -> list[PodInfo]:
+    """List Kubernetes Pods, optionally restricted to one namespace.
+
+    This is the resolution target for every label selector in the Istio
+    graph (Service.spec.selector, Gateway/Sidecar/PeerAuthentication/
+    AuthorizationPolicy/RequestAuthentication selectors) and the missing link
+    between a Service and the ServiceAccount that backs it.
+    """
+    v1 = client.CoreV1Api()
+    if namespace is not None:
+        pod_list = cast(
+            V1PodList, v1.list_namespaced_pod(namespace, _request_timeout=_REQUEST_TIMEOUT),
+        )
+    else:
+        pod_list = cast(
+            V1PodList, v1.list_pod_for_all_namespaces(_request_timeout=_REQUEST_TIMEOUT),
+        )
+    return [
+        PodInfo(
+            name=pod.metadata.name,
+            namespace=pod.metadata.namespace,
+            labels=dict(pod.metadata.labels or {}),
+            service_account=pod.spec.service_account_name if pod.spec else None,
+        )
+        for pod in (pod_list.items or [])
     ]
 
 
