@@ -22,7 +22,7 @@ nicht erreichbare/ungesunde CRDs.
 | Datei | Zweck |
 |---|---|
 | [main.py](main.py) | CLI-Einstiegspunkt (Argument-Parsing, Tabellenausgabe) |
-| [kubectl.py](kubectl.py) | Generische Kubernetes-Datenerfassung: Namespaces, Services, CRD-Auflistung mit Versionen |
+| [kubectl.py](kubectl.py) | Generische Kubernetes-Datenerfassung: Namespaces, Services, ServiceAccounts, Pods, CRD-Auflistung mit Versionen |
 | [istio.py](istio.py) | Parser für die Istio-CRDs selbst (VirtualService, DestinationRule, Gateway, ServiceEntry, Sidecar, WorkloadEntry, WorkloadGroup, PeerAuthentication, AuthorizationPolicy, RequestAuthentication) in strukturierte Dataclasses — aktuell noch nicht an die CLI angebunden, für eine künftige Traffic-/Policy-Graph-Auswertung vorbereitet |
 
 ## Installation
