@@ -6,18 +6,22 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 import urllib3
+import yaml
 from kubernetes import client, config
 from kubernetes.client import (
+    V1ConfigMap,
     V1CustomResourceDefinitionList,
     V1NamespaceList,
     V1PodList,
     V1ServiceAccountList,
     V1ServiceList,
 )
+from kubernetes.client.rest import ApiException
 
 logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = 30
+_DEFAULT_ROOT_NAMESPACE = "istio-system"
 
 
 # ---------------------------------------------------------------------------
@@ -53,10 +57,63 @@ def load_config(*, verify_ssl: bool = True) -> None:
 # Namespace listing
 # ---------------------------------------------------------------------------
 
-def get_namespaces() -> list[str]:
+@dataclass
+class NamespaceInfo:
+    name: str
+    labels: dict[str, str] = field(default_factory=dict)
+
+
+def get_namespaces() -> list[NamespaceInfo]:
+    """List Kubernetes namespaces including their labels.
+
+    Labels (e.g. ``istio-injection: enabled``, ``istio.io/rev``) are what
+    determine whether a namespace's pods actually get a sidecar and are part
+    of the mesh in the first place — a namespace-scoped policy targeting a
+    namespace without one of these labels never actually applies to anything.
+    """
     v1 = client.CoreV1Api()
     ns_list = cast(V1NamespaceList, v1.list_namespace(_request_timeout=_REQUEST_TIMEOUT))
-    return [ns.metadata.name for ns in (ns_list.items or [])]
+    return [
+        NamespaceInfo(name=ns.metadata.name, labels=dict(ns.metadata.labels or {}))
+        for ns in (ns_list.items or [])
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Mesh config (root namespace)
+# ---------------------------------------------------------------------------
+
+def get_mesh_root_namespace(istio_namespace: str = _DEFAULT_ROOT_NAMESPACE) -> str:
+    """Resolve the mesh's root namespace from the control plane's "istio"
+    ConfigMap (``data["mesh"].rootNamespace``).
+
+    Namespace-less PeerAuthentication/AuthorizationPolicy/RequestAuthentication/
+    Sidecar resources only apply mesh-wide when they live in this namespace —
+    everywhere else the same resource is only namespace-scoped. It defaults to
+    "istio-system" but is configurable via ``meshConfig.rootNamespace``, so it
+    can't just be assumed.
+    """
+    v1 = client.CoreV1Api()
+    try:
+        cm = cast(
+            V1ConfigMap,
+            v1.read_namespaced_config_map(
+                "istio", istio_namespace, _request_timeout=_REQUEST_TIMEOUT,
+            ),
+        )
+    except (ApiException, urllib3.exceptions.HTTPError) as e:
+        logger.debug("Could not read istio ConfigMap in %s: %s", istio_namespace, e)
+        return istio_namespace
+
+    mesh_yaml = (cm.data or {}).get("mesh")
+    if not mesh_yaml:
+        return istio_namespace
+    try:
+        mesh = yaml.safe_load(mesh_yaml) or {}
+    except yaml.YAMLError as e:
+        logger.debug("Could not parse mesh config in %s: %s", istio_namespace, e)
+        return istio_namespace
+    return mesh.get("rootNamespace") or istio_namespace
 
 
 # ---------------------------------------------------------------------------
