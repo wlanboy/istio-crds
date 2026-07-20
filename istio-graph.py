@@ -519,6 +519,13 @@ def build_graph(namespace: str | None) -> dict[str, object]:
     hosts = get_hosts(resources)
 
     g = GraphBuilder()
+    # Reihenfolge: GraphBuilder.add_edge verwirft Kanten, deren
+    # Quelle/Ziel noch nicht existiert (siehe add_edge oben), 
+    # daher müssen zuerst alle Knoten definiert sein (Core- und Istio-Knoten), 
+    # bevor überhaupt eine Kante gezogen wird.
+    # _add_istio_nodes muss dabei vor _add_istio_edges laufen, und 
+    # _add_network_policy_edges zuletzt, da es
+    # sowohl auf Core- als auch auf Istio-Knoten (Namespaces, Pods) verweist.
     _add_core_nodes(
         g, namespaces=namespaces, services=services, service_accounts=service_accounts, pods=pods,
         network_policies=network_policies, hosts=hosts, mesh_root_namespace=mesh_root_namespace,
