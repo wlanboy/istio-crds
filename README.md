@@ -179,6 +179,9 @@ Direkt aus `istio-graph.py` importieren, ohne Zwischendatei:
 
 ```bash
 python3 istio-graph.py | python3 datenimport.py --clear
+
+#Alle Parameter
+python3 istio-graph.py | python3 datenimport.py --uri bolt://gmk.lan:7687 --user neo4j --password changeme123 --database neo4j --clear
 ```
 
 Gegen eine entfernte Instanz mit eigenen Zugangsdaten:
