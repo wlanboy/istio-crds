@@ -310,6 +310,12 @@ def _add_istio_edges(
     g: GraphBuilder, *, resources: IstioResources, pods: list[PodInfo],
     namespaces: list[NamespaceInfo], mesh_root_namespace: str,
 ) -> None:
+    # Verknüpft die zuvor in _add_istio_nodes angelegten Istio-Knoten
+    # untereinander sowie mit Namespaces, Hosts, ServiceAccounts und Pods.
+    # Die Kanten werden getrennt von der Knotenerzeugung aufgebaut, damit
+    # beim Verweisen auf andere Istio-Objekte (z. B. VirtualService -> Gateway)
+    # der Zielknoten bereits existiert, unabhängig von der Reihenfolge der
+    # Ressourcen in resources.
     for vs in resources.virtual_services:
         node_id = f"virtualservice:{vs.namespace}/{vs.name}"
         g.add_edge(node_id, f"namespace:{vs.namespace}", "in_namespace")
@@ -468,6 +474,13 @@ def _add_network_policy_edges(
     g: GraphBuilder, *, network_policies: list[NetworkPolicyInfo],
     namespaces: list[NamespaceInfo], pods: list[PodInfo],
 ) -> None:
+    # Bildet für jede NetworkPolicy den eigenen Pod-Scope sowie die ingress-/
+    # egress-Regeln auf Kanten ab. Pro Peer wird die Kantenrichtung bewusst
+    # unterschiedlich gesetzt (Peer -> Policy bei ingress, Policy -> Peer bei
+    # egress), damit der Graph tatsächlichen Traffic-Fluss abbildet statt nur
+    # der Policy-Zugehörigkeit; ip_block-Peers werden dabei als eigene CIDR-
+    # Knoten nachträglich ergänzt, da sie nicht Teil der vorab erzeugten Knoten
+    # aus _add_core_nodes sind.
     for np in network_policies:
         node_id = f"networkpolicy:{np.namespace}/{np.name}"
         _workload_scope_edges(g, node_id=node_id, namespace=np.namespace, selector=np.pod_selector, pods=pods)
