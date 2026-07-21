@@ -66,10 +66,6 @@ six==1.17.0
     # via
     #   kubernetes
     #   python-dateutil
-typing-extensions==4.16.0
-    # via
-    #   aiohttp
-    #   aiosignal
 urllib3==2.7.0
     # via
     #   kubernetes
