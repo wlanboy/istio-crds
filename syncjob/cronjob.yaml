@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: istio-graph-sync
+  namespace: istio-graph-sync
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: istio-graph-sync
+          restartPolicy: OnFailure
+          containers:
+            - name: sync
+              # Lokal bauen und in eine erreichbare Registry pushen, dann hier ersetzen:
+              #   docker build -t <registry>/istio-crds-sync:latest .
+              #   docker push <registry>/istio-crds-sync:latest
+              image: istio-crds-sync:latest
+              envFrom:
+                - secretRef:
+                    name: istio-graph-sync-neo4j
+              env:
+                - name: VERBOSE
+                  value: "false"
+                # Optional, siehe README: ISTIO_NAMESPACE, ISTIO_INSECURE_SKIP_TLS_VERIFY,
+                # DATENIMPORT_CLEAR.
