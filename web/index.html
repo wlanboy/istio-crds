@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neo4j Graph Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="login-panel" class="panel">
+  <h1>Neo4j Graph Viewer</h1>
+  <form id="login-form">
+    <label>URI
+      <input type="text" id="uri" value="bolt://gmk.lan:7687" required>
+    </label>
+    <label>Benutzer
+      <input type="text" id="user" value="neo4j" required>
+    </label>
+    <label>Passwort
+      <input type="password" id="password" value="" required>
+    </label>
+    <label>Limit (max. Knoten)
+      <input type="number" id="limit" value="300" min="1" max="5000">
+    </label>
+    <button type="submit" id="connect-btn">Verbinden</button>
+    <p id="login-error" class="error"></p>
+  </form>
+</div>
+
+<div id="graph-panel" class="hidden">
+  <div id="toolbar">
+    <span id="stats"></span>
+    <div id="legend"></div>
+    <button id="disconnect-btn">Trennen</button>
+  </div>
+  <div id="graph-scroll">
+    <canvas id="graph-canvas"></canvas>
+  </div>
+  <div id="tooltip" class="hidden"></div>
+</div>
+
+<script src="neo4j-web.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
