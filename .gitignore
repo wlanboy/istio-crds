@@ -13,3 +13,4 @@ graph2.json
 .env
 objekte.json
 data/
+k8s/secret.yaml
