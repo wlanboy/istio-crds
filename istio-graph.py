@@ -283,7 +283,8 @@ def _add_istio_nodes(g: GraphBuilder, *, resources: IstioResources) -> None:
     for dr in resources.destination_rules:
         g.add_node(
             "destinationrule", dr.name, dr.namespace,
-            subsets=[s.name for s in dr.subsets], tls_mode=dr.tls_mode, export_to=dr.export_to,
+            subsets=[s.name for s in dr.subsets], tls_mode=dr.tls_mode, ports=dr.ports,
+            export_to=dr.export_to,
         )
     for gw in resources.gateways:
         g.add_node("gateway", gw.name, gw.namespace, direction=gw.direction, selector=gw.selector)

@@ -66,6 +66,7 @@ class DestinationRuleInfo:
     host: str
     subsets: list[Subset] = field(default_factory=list)
     tls_mode: str | None = None
+    ports: list[int] = field(default_factory=list)
     export_to: list[str] = field(default_factory=list)
 
 
@@ -340,6 +341,14 @@ def _parse_virtual_service(item: dict[str, Any]) -> VirtualServiceInfo:
     )
 
 
+def _port_level_setting_ports(traffic_policy: dict[str, Any]) -> list[int]:
+    return [
+        pls["port"]["number"]
+        for pls in (traffic_policy.get("portLevelSettings") or [])
+        if (pls.get("port") or {}).get("number") is not None
+    ]
+
+
 def _parse_destination_rule(item: dict[str, Any]) -> DestinationRuleInfo:
     name, namespace = _meta(item)
     spec = item.get("spec") or {}
@@ -347,10 +356,18 @@ def _parse_destination_rule(item: dict[str, Any]) -> DestinationRuleInfo:
         Subset(name=s["name"], labels=dict(s.get("labels") or {}))
         for s in (spec.get("subsets") or []) if s.get("name")
     ]
-    tls_mode = ((spec.get("trafficPolicy") or {}).get("tls") or {}).get("mode")
+    traffic_policy = spec.get("trafficPolicy") or {}
+    tls_mode = (traffic_policy.get("tls") or {}).get("mode")
+    # Port-specific overrides live in trafficPolicy.portLevelSettings (and, per
+    # subset, subsets[].trafficPolicy.portLevelSettings) — these are the only
+    # place a port number appears in a DestinationRule, so surface them as a
+    # single deduplicated, sorted list.
+    ports = set(_port_level_setting_ports(traffic_policy))
+    for s in (spec.get("subsets") or []):
+        ports.update(_port_level_setting_ports(s.get("trafficPolicy") or {}))
     return DestinationRuleInfo(
         name=name, namespace=namespace, host=spec.get("host", ""),
-        subsets=subsets, tls_mode=tls_mode,
+        subsets=subsets, tls_mode=tls_mode, ports=sorted(ports),
         export_to=list(spec.get("exportTo") or []),
     )
 
