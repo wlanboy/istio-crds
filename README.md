@@ -25,6 +25,7 @@ nicht erreichbare/ungesunde CRDs.
 | [istio-objekt-liste.py](istio-objekt-liste.py) | CLI-Einstiegspunkt, der alle gesammelten Kubernetes-/Istio-Objekte als ein flaches JSON-Dokument ausgibt |
 | [istio-graph.py](istio-graph.py) | CLI-Einstiegspunkt, der aus denselben Objekten einen JSON-Abhängigkeitsgraphen (Knoten + Kanten) baut |
 | [datenimport.py](datenimport.py) | CLI-Einstiegspunkt, der einen von istio-graph.py erzeugten Abhängigkeitsgraphen nach Neo4j importiert |
+| [sync-job.py](sync-job.py) | Führt istio-graph.py und datenimport.py einmalig hintereinander aus; für den Betrieb als Kubernetes CronJob (siehe [syncjob/syncjob.md](syncjob/syncjob.md)) |
 | [kubectl.py](kubectl.py) | Generische Kubernetes-Datenerfassung: Namespaces (inkl. Labels), Services, ServiceAccounts, Pods, Mesh-Root-Namespace, CRD-Auflistung mit Versionen |
 | [istio.py](istio.py) | Parser für die Istio-CRDs selbst (VirtualService, DestinationRule, Gateway, ServiceEntry, Sidecar, WorkloadEntry, WorkloadGroup, PeerAuthentication, AuthorizationPolicy, RequestAuthentication) in strukturierte Dataclasses — für eine künftige Traffic-/Policy-Graph-Auswertung vorbereitet |
 
