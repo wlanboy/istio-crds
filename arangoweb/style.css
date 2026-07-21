@@ -1,0 +1,184 @@
+:root {
+  color-scheme: light;
+  --surface-1:      #fcfcfb;
+  --surface-2:      #f9f9f7;
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #898781;
+  --border:         rgba(11,11,11,0.10);
+  --gridline:       #e1e0d9;
+  --error:          #d03b3b;
+  --accent:         #2a78d6;
+  --accent-hover:   #1c5cab;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --surface-2:      #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --border:         rgba(255,255,255,0.10);
+    --gridline:       #2c2c2a;
+    --error:          #e66767;
+    --accent:         #3987e5;
+    --accent-hover:   #5598e7;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1:      #1a1a19;
+  --surface-2:      #0d0d0d;
+  --text-primary:   #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted:     #898781;
+  --border:         rgba(255,255,255,0.10);
+  --gridline:       #2c2c2a;
+  --error:          #e66767;
+  --accent:         #3987e5;
+  --accent-hover:   #5598e7;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.hidden { display: none !important; }
+
+/* Login panel */
+#login-panel {
+  max-width: 380px;
+  margin: 10vh auto 0;
+  padding: 32px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+#login-panel h1 {
+  font-size: 1.25rem;
+  margin: 0 0 20px;
+}
+#login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#login-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+#login-form input {
+  font-size: 0.95rem;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+#login-form button {
+  margin-top: 6px;
+  padding: 10px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+#login-form button:hover { background: var(--accent-hover); }
+#login-form button:disabled { opacity: 0.6; cursor: default; }
+.error {
+  color: var(--error);
+  font-size: 0.85rem;
+  margin: 0;
+  min-height: 1.2em;
+}
+
+/* Graph panel */
+#graph-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 16px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+#stats {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+#legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex: 1;
+  font-size: 0.8rem;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+#disconnect-btn {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+#disconnect-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
+
+#graph-scroll {
+  flex: 1;
+  overflow: auto;
+  background: var(--surface-2);
+}
+
+#graph-canvas {
+  display: block;
+  cursor: grab;
+}
+#graph-canvas:active { cursor: grabbing; }
+
+#tooltip {
+  position: fixed;
+  pointer-events: none;
+  max-width: 320px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  white-space: pre-wrap;
+  z-index: 10;
+}
