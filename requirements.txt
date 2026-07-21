@@ -34,10 +34,16 @@ neo4j==6.2.0
     # via istio-crds (pyproject.toml)
 oauthlib==3.3.1
     # via requests-oauthlib
+packaging==26.2
+    # via python-arango
 propcache==0.5.2
     # via
     #   aiohttp
     #   yarl
+pyjwt==2.13.0
+    # via python-arango
+python-arango==8.3.3
+    # via istio-crds (pyproject.toml)
 python-dateutil==2.9.0.post0
     # via kubernetes
 python-dotenv==1.2.2
@@ -49,9 +55,13 @@ pyyaml==6.0.3
 requests==2.34.2
     # via
     #   kubernetes
+    #   python-arango
     #   requests-oauthlib
+    #   requests-toolbelt
 requests-oauthlib==2.0.0
     # via kubernetes
+requests-toolbelt==1.0.0
+    # via python-arango
 six==1.17.0
     # via
     #   kubernetes
@@ -63,6 +73,7 @@ typing-extensions==4.16.0
 urllib3==2.7.0
     # via
     #   kubernetes
+    #   python-arango
     #   requests
 websocket-client==1.9.0
     # via kubernetes
