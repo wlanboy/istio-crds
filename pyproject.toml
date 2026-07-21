@@ -8,6 +8,7 @@ dependencies = [
     "kubernetes>=36.0.3",
     "neo4j>=6.2.0",
     "python-dotenv>=1.2.2",
+    "websockets>=16.1.1",
 ]
 
 [dependency-groups]
