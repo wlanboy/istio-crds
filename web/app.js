@@ -1,18 +1,18 @@
 (function () {
   "use strict";
 
-  // Categorical palette (fixed order, never cycled beyond slot 8 -> "Other")
+  // Kategorien-Farbpalette (feste Reihenfolge, wird nicht wiederholt - ab dem 9. Label greift "Sonstige")
   const PALETTE = [
-    "#2a78d6", // blue
+    "#2a78d6", // blau
     "#eb6834", // orange
-    "#1baf7a", // aqua
-    "#eda100", // yellow
+    "#1baf7a", // türkis
+    "#eda100", // gelb
     "#e87ba4", // magenta
-    "#008300", // green
-    "#4a3aa7", // violet
-    "#e34948", // red
+    "#008300", // grün
+    "#4a3aa7", // violett
+    "#e34948", // rot
   ];
-  const OTHER_COLOR = "#898781"; // muted gray for overflow labels
+  const OTHER_COLOR = "#898781"; // gedecktes Grau für alle Labels ab dem 9.
   const NODE_RADIUS = 14;
 
   const loginPanel = document.getElementById("login-panel");
@@ -36,7 +36,7 @@
 
   let draggingNode = null;
   let hoveredNode = null;
-  let panStart = null; // { mouseX, mouseY, scrollLeft, scrollTop } while panning the empty background
+  let panStart = null; // { mouseX, mouseY, scrollLeft, scrollTop } während des Verschiebens (Pan) im leeren Hintergrund
 
   loginForm.addEventListener("submit", onConnect);
   disconnectBtn.addEventListener("click", onDisconnect);
@@ -167,32 +167,34 @@
   }
 
   const MARGIN_X = 70, MARGIN_Y = 60;
-  const GRAVITY = 0.02; // pulls every node gently toward the center
+  const GRAVITY = 0.02; // zieht jeden Knoten sanft in Richtung Mittelpunkt
 
-  // Static force-directed network layout (Fruchterman-Reingold): nodes repel
-  // each other, edges pull connected nodes together. The simulation runs to
-  // completion synchronously right here and is only drawn once afterwards -
-  // there is no requestAnimationFrame loop, so nothing visibly moves.
+  // Statisches, kräftebasiertes Netzwerk-Layout (Fruchterman-Reingold-Algorithmus):
+  // Knoten stoßen sich gegenseitig ab, Kanten ziehen verbundene Knoten zueinander.
+  // Die Simulation läuft hier synchron bis zum Ende durch und wird erst danach
+  // einmalig gezeichnet - es gibt keine requestAnimationFrame-Schleife, es bewegt
+  // sich also sichtbar nichts (kein Animations-Effekt).
   function layoutNetwork() {
     const n = nodes.length;
     if (n === 0) return;
 
     nodes.forEach((node, i) => {
       const angle = (2 * Math.PI * i) / n;
-      const radius = 150 + (i % 3) * 40; // slight stagger so the simulation has room to unfold
+      const radius = 150 + (i % 3) * 40; // leichte Staffelung, damit die Simulation Raum zum "Entfalten" hat
       node.x = Math.cos(angle) * radius;
       node.y = Math.sin(angle) * radius;
     });
 
-    const k = 100; // ideal distance between connected nodes
+    const k = 150; // idealer Abstand zwischen verbundenen Knoten
     const iterations = n > 200 ? 100 : 300;
-    // An isolated/poorly-connected node feels repulsion from every other
-    // node, so how far it could drift grows with n - cap it directly instead
-    // of trying to tune gravity to balance out at every graph size.
+    // Ein isolierter/schlecht verbundener Knoten spürt Abstoßung von jedem
+    // anderen Knoten - wie weit er dadurch abdriften kann, wächst mit n.
+    // Deshalb wird hier direkt eine Obergrenze gesetzt, statt zu versuchen,
+    // die Gravitation für jede Graphgröße passend zu justieren.
     const maxRadius = 150 + k * Math.sqrt(n);
 
     for (let iter = 0; iter < iterations; iter++) {
-      const temp = 60 * (1 - iter / iterations); // cools down -> settles instead of oscillating
+      const temp = 60 * (1 - iter / iterations); // kühlt über die Zeit ab -> System beruhigt sich statt zu oszillieren
 
       for (const node of nodes) { node.fx = 0; node.fy = 0; }
 
@@ -222,8 +224,8 @@
       }
 
       for (const node of nodes) {
-        // mild pull toward the center - without it, poorly connected nodes
-        // (few/no edges) only ever feel repulsion and drift out indefinitely
+        // leichter Zug zur Mitte - ohne ihn würden schlecht verbundene Knoten
+        // (wenige/keine Kanten) nur Abstoßung spüren und unbegrenzt weiter abdriften
         node.fx -= node.x * GRAVITY;
         node.fy -= node.y * GRAVITY;
 
@@ -232,7 +234,7 @@
         node.x += (node.fx / disp) * limited;
         node.y += (node.fy / disp) * limited;
 
-        // hard clamp: never let a node end up further out than maxRadius
+        // harte Begrenzung: kein Knoten darf weiter als maxRadius vom Zentrum entfernt landen
         const r = Math.sqrt(node.x * node.x + node.y * node.y);
         if (r > maxRadius) {
           const s = maxRadius / r;
@@ -281,9 +283,9 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  // Resizing only grows the canvas floor to the new viewport - it must NOT
-  // re-run the physics simulation (that's O(n^2) * iterations and made every
-  // resize event, e.g. while dragging the window edge, painfully slow).
+  // Beim Resize wird die Canvas-Mindestgröße nur an das neue Viewport angepasst -
+  // die Physik-Simulation darf dabei NICHT erneut laufen (die ist O(n^2) * Iterationen
+  // und würde jedes Resize-Event, z.B. beim Ziehen am Fensterrand, spürbar verlangsamen).
   function onWindowResize() {
     if (graphPanel.classList.contains("hidden")) return;
     const viewport = measureViewport();
@@ -311,7 +313,8 @@
 
     ctx.clearRect(0, 0, width, height);
 
-    // neighborhood of the hovered node, used to focus attention on hover
+    // Nachbarschaft des gehoverten Knotens - wird genutzt, um beim Hover
+    // die Aufmerksamkeit gezielt darauf zu lenken (Rest wird abgedunkelt)
     const neighborIds = new Set();
     if (hoveredNode) {
       neighborIds.add(hoveredNode.id);
@@ -321,7 +324,7 @@
       }
     }
 
-    // edges
+    // Kanten
     for (const e of edges) {
       const a = nodeById.get(e.source);
       const b = nodeById.get(e.target);
@@ -337,7 +340,7 @@
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
 
-      // arrowhead near target
+      // Pfeilspitze am Zielknoten
       const angle = Math.atan2(b.y - a.y, b.x - a.x);
       const tx = b.x - Math.cos(angle) * NODE_RADIUS;
       const ty = b.y - Math.sin(angle) * NODE_RADIUS;
@@ -350,8 +353,9 @@
       ctx.closePath();
       ctx.fill();
 
-      // relationship type label at midpoint, on a background pill so it
-      // stays legible where lines cross
+      // Beziehungstyp als Label auf der Kantenmitte, mit hinterlegter
+      // "Pille" (abgerundetes Rechteck) als Hintergrund, damit der Text auch
+      // an Kreuzungspunkten von Linien lesbar bleibt
       const mx = (a.x + b.x) / 2;
       const my = (a.y + b.y) / 2;
       ctx.font = "10px system-ui, sans-serif";
@@ -366,7 +370,7 @@
     }
     ctx.globalAlpha = 1;
 
-    // nodes
+    // Knoten
     for (const node of nodes) {
       const isDimmed = hoveredNode && !neighborIds.has(node.id);
       const isHovered = node === hoveredNode;
@@ -410,7 +414,7 @@
     const p = canvasPoint(evt);
     draggingNode = nodeAt(p.x, p.y);
     if (!draggingNode) {
-      // clicked the empty background - pan the scroll container instead
+      // Klick auf leeren Hintergrund - stattdessen den Scroll-Container verschieben (Pan)
       panStart = {
         mouseX: evt.clientX,
         mouseY: evt.clientY,
