@@ -30,7 +30,7 @@ import os
 import sys
 from typing import Any
 
-from arango import ArangoClient
+from arango.client import ArangoClient
 from arango.database import StandardDatabase
 from arango.exceptions import ArangoServerError, ServerConnectionError
 from dotenv import load_dotenv
