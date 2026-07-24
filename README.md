@@ -24,6 +24,7 @@ nicht erreichbare/ungesunde CRDs.
 | [main.py](main.py) | CLI-Einstiegspunkt (Argument-Parsing, Tabellenausgabe) für die CRD-Übersicht |
 | [istio-objekt-liste.py](istio-objekt-liste.py) | CLI-Einstiegspunkt, der alle gesammelten Kubernetes-/Istio-Objekte als ein flaches JSON-Dokument ausgibt |
 | [istio-graph.py](istio-graph.py) | CLI-Einstiegspunkt, der aus denselben Objekten einen JSON-Abhängigkeitsgraphen (Knoten + Kanten) baut |
+| [connections-graph.py](connections-graph.py) | CLI-Einstiegspunkt, der daraus einen Deployment-zentrierten Verbindungsgraphen baut: welche Deployment-zu-Deployment-Verbindungen über Gateway/Service/ServiceEntry/VirtualService möglich sind, plus explizit per AuthorizationPolicy verbotene Verbindungen |
 | [datenimport.py](datenimport.py) | CLI-Einstiegspunkt, der einen von istio-graph.py erzeugten Abhängigkeitsgraphen nach Neo4j importiert |
 | [sync-job.py](sync-job.py) | Führt istio-graph.py und datenimport.py einmalig hintereinander aus; für den Betrieb als Kubernetes CronJob (siehe [syncjob/syncjob.md](syncjob/syncjob.md)) |
 | [kubectl.py](kubectl.py) | Generische Kubernetes-Datenerfassung: Namespaces (inkl. Labels), Services, ServiceAccounts, Pods, Mesh-Root-Namespace, CRD-Auflistung mit Versionen |
@@ -137,6 +138,37 @@ Nur ein Namespace, mit Debug-Ausgabe für nicht auflösbare Kanten
 
 ```bash
 python3 istio-graph.py -n default -v > graph.json
+```
+
+### connections-graph.py
+
+Baut aus denselben Objekten wie `istio-graph.py` einen **Deployment-zentrierten
+Verbindungsgraphen** (`{"nodes": [...], "edges": [...]}`), statt jede
+aufgelöste Selektor-/Host-Beziehung 1:1 abzubilden. Jede Verbindung beginnt an
+einem `gateway`- oder `deployment`-Knoten und endet immer an einem
+`deployment`-Knoten; `service`, `serviceentry`, `virtualservice` und
+`authorizationpolicy` sind reine Zwischen-Hops (Kanten sind Teilstrecken
+einer vollständigen Verbindung). `destinationrule` bleibt bewusst außen vor,
+und Attribute wie `service_account` hängen direkt am `deployment`-Knoten
+statt an einem eigenen Knoten.
+
+Enthalten sind alle Verbindungen, die über Service-Selektoren,
+VirtualService-Routing oder Gateway-Exposition **möglich** sind — unabhängig
+davon, ob ein Pod sie im Betrieb tatsächlich nutzt — sowie zusätzlich alle
+Verbindungen, die durch eine `AuthorizationPolicy` mit `action: DENY` und
+einer konkreten Regel **explizit verboten** sind (`relation: "forbidden"`
+auf den entsprechenden Kanten). Implizite Verbote, die z. B. aus einer leeren
+"default-deny"-`AuthorizationPolicy` oder aus einer `ALLOW`-Policy folgen,
+werden nicht angezeigt.
+
+```bash
+python3 connections-graph.py [-n NAMESPACE] [--insecure-skip-tls-verify] [-v]
+```
+
+Verbindungsgraph des gesamten Clusters als JSON:
+
+```bash
+python3 connections-graph.py > connections.json
 ```
 
 ### datenimport.py
