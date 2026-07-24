@@ -22,12 +22,13 @@
     "local-path-storage",
     "cert-manager",
   ];
-
   const loginPanel = document.getElementById("login-panel");
   const loginForm = document.getElementById("login-form");
   const loginError = document.getElementById("login-error");
   const connectBtn = document.getElementById("connect-btn");
   const graphPanel = document.getElementById("graph-panel");
+  const tabFull = document.getElementById("tab-full");
+  const tabConnections = document.getElementById("tab-connections");
   const disconnectBtn = document.getElementById("disconnect-btn");
   const statsEl = document.getElementById("stats");
   const legendEl = document.getElementById("legend");
@@ -36,12 +37,13 @@
   const tooltip = document.getElementById("tooltip");
   const ctx = canvas.getContext("2d");
 
-  let conn = null; // { endpoint, database, user, password }
+  let conn = null; // { endpoint, database, connectionsDatabase, user, password }
   let nodes = [];
   let edges = [];
   let nodeById = new Map();
   let labelColor = new Map();
   let width = 0, height = 0;
+  let currentView = "full"; // "full" | "connections"
 
   let draggingNode = null;
   let hoveredNode = null;
@@ -49,6 +51,8 @@
 
   loginForm.addEventListener("submit", onConnect);
   disconnectBtn.addEventListener("click", onDisconnect);
+  tabFull.addEventListener("click", () => onSwitchView("full"));
+  tabConnections.addEventListener("click", () => onSwitchView("connections"));
   window.addEventListener("resize", onWindowResize);
   canvas.addEventListener("mousedown", onMouseDown);
   canvas.addEventListener("mousemove", onMouseMove);
@@ -75,6 +79,7 @@
   if (saved) {
     document.getElementById("endpoint").value = saved.endpoint;
     document.getElementById("database").value = saved.database;
+    document.getElementById("connections-database").value = saved.connectionsDatabase;
     document.getElementById("user").value = saved.user;
     document.getElementById("password").value = saved.password;
     document.getElementById("limit").value = saved.limit;
@@ -89,15 +94,16 @@
 
     const endpoint = document.getElementById("endpoint").value.trim().replace(/\/$/, "");
     const database = document.getElementById("database").value.trim();
+    const connectionsDatabase = document.getElementById("connections-database").value.trim();
     const user = document.getElementById("user").value.trim();
     const password = document.getElementById("password").value;
     const limit = parseInt(document.getElementById("limit").value, 10) || 300;
 
-    const candidate = { endpoint, database, user, password };
+    const candidate = { endpoint, database, connectionsDatabase, user, password };
     try {
       await arangoQuery(candidate, "RETURN 1", {});
       conn = candidate;
-      saveConnection({ endpoint, database, user, password, limit });
+      saveConnection({ endpoint, database, connectionsDatabase, user, password, limit });
       await loadGraph(limit);
       loginPanel.classList.add("hidden");
       graphPanel.classList.remove("hidden");
@@ -119,6 +125,26 @@
     loginPanel.classList.remove("hidden");
     document.getElementById("password").value = "";
     localStorage.removeItem(STORAGE_KEY);
+    onSwitchView("full");
+  }
+
+  async function onSwitchView(view) {
+    if (view === currentView) return;
+    currentView = view;
+    tabFull.classList.toggle("active", view === "full");
+    tabConnections.classList.toggle("active", view === "connections");
+    if (!conn) return;
+
+    hoveredNode = null;
+    hideTooltip();
+    const limit = parseInt(document.getElementById("limit").value, 10) || 300;
+    try {
+      await loadGraph(limit);
+      layoutNetwork();
+      draw();
+    } catch (err) {
+      statsEl.textContent = "Laden fehlgeschlagen: " + (err.message || err);
+    }
   }
 
   function nodeDisplayLabel(labels) {
@@ -199,9 +225,51 @@
     return nodeDisplayLabel(labels);
   }
 
-  async function loadGraph(limit) {
+  // "full" liest aus conn.database (Rohgraph aus istio-graph.py via
+  // datenimport-arangodb.py), "connections" aus conn.connectionsDatabase
+  // (Deployment-Verbindungsgraph aus connections-graph.py via
+  // datenimport-connections-arangodb.py) - beide Importer schreiben laut
+  // arangodb/init/create-istio-db.js in getrennte Datenbanken, jeweils mit
+  // identisch benannten nodes/edges-Collections, daher reicht es, dieselbe
+  // Lade-Logik mit einem anderen Datenbanknamen aufzurufen.
+  function loadGraph(limit) {
+    const databaseName = currentView === "connections" ? conn.connectionsDatabase : conn.database;
+    return loadGraphFromDatabase(databaseName, limit);
+  }
+
+  function buildNode(doc) {
+    const id = doc._id;
+    const labels = [labelFromKind(doc.kind)];
+    const label = nodeDisplayLabel(labels);
+    const properties = stripInternalFields(doc);
+    return {
+      id,
+      labels,
+      properties,
+      color: colorForLabel(label),
+      caption: nodeCaption(properties, labels),
+      x: 0,
+      y: 0,
+    };
+  }
+
+  function buildEdge(doc) {
+    return {
+      id: doc._id,
+      type: (doc.relation || "").toUpperCase(),
+      properties: stripInternalFields(doc),
+      source: doc._from,
+      target: doc._to,
+    };
+  }
+
+  // Lädt Knoten/Kanten aus einer bestimmten ArangoDB-Datenbank (siehe
+  // loadGraph) - identische Collection-Namen (nodes/edges) in beiden
+  // Datenbanken erlauben dieselbe Abfrage für Roh- und Verbindungsgraph.
+  async function loadGraphFromDatabase(databaseName, limit) {
+    const dbConn = Object.assign({}, conn, { database: databaseName });
     const nodeDocs = await arangoQuery(
-      conn,
+      dbConn,
       "FOR n IN nodes " +
         "FILTER n.namespace == null OR n.namespace NOT IN @excludedNamespaces " +
         'FILTER NOT (n.kind == "namespace" AND n.name IN @excludedNamespaces) ' +
@@ -212,23 +280,10 @@
 
     nodes = [];
     nodeById = new Map();
-
     for (const doc of nodeDocs) {
-      const id = doc._id;
-      const labels = [labelFromKind(doc.kind)];
-      const label = nodeDisplayLabel(labels);
-      const properties = stripInternalFields(doc);
-      const node = {
-        id,
-        labels,
-        properties,
-        color: colorForLabel(label),
-        caption: nodeCaption(properties, labels),
-        x: 0,
-        y: 0,
-      };
+      const node = buildNode(doc);
       nodes.push(node);
-      nodeById.set(id, node);
+      nodeById.set(node.id, node);
     }
 
     edges = [];
@@ -238,21 +293,13 @@
       // as bind vars) - fetch a batch of edges and keep only those between
       // nodes we already loaded, same approach the Neo4j version used.
       const edgeDocs = await arangoQuery(
-        conn,
+        dbConn,
         "FOR e IN edges LIMIT @limit RETURN e",
         { limit: limit * 4 }
       );
       for (const doc of edgeDocs) {
-        const sourceId = doc._from;
-        const targetId = doc._to;
-        if (!nodeById.has(sourceId) || !nodeById.has(targetId)) continue;
-        edges.push({
-          id: doc._id,
-          type: (doc.relation || "").toUpperCase(),
-          properties: stripInternalFields(doc),
-          source: sourceId,
-          target: targetId,
-        });
+        if (!nodeById.has(doc._from) || !nodeById.has(doc._to)) continue;
+        edges.push(buildEdge(doc));
       }
     }
 
@@ -421,6 +468,7 @@
     const gridline = styles.getPropertyValue("--gridline").trim() || "#e1e0d9";
     const surface = styles.getPropertyValue("--surface-2").trim() || "#f9f9f7";
     const accent = styles.getPropertyValue("--accent").trim() || "#2a78d6";
+    const errorColor = styles.getPropertyValue("--error").trim() || "#d03b3b";
 
     ctx.clearRect(0, 0, width, height);
 
@@ -441,21 +489,28 @@
       if (!a || !b) continue;
       const isFocused = hoveredNode && (e.source === hoveredNode.id || e.target === hoveredNode.id);
       const isDimmed = hoveredNode && !isFocused;
+      // "forbidden" only occurs in the connections-graph view (explicit
+      // AuthorizationPolicy(DENY) rules) - always drawn in the error color so
+      // it stands out from merely-possible connections, hover state aside.
+      const isForbidden = e.type === "FORBIDDEN";
+      const edgeColor = isForbidden ? errorColor : (isFocused ? accent : gridline);
 
       ctx.globalAlpha = isDimmed ? 0.25 : 1;
-      ctx.strokeStyle = isFocused ? accent : gridline;
-      ctx.lineWidth = isFocused ? 2.5 : 1.5;
+      ctx.strokeStyle = edgeColor;
+      ctx.lineWidth = isFocused || isForbidden ? 2.5 : 1.5;
+      ctx.setLineDash(isForbidden ? [5, 3] : []);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
+      ctx.setLineDash([]);
 
       // arrowhead near target
       const angle = Math.atan2(b.y - a.y, b.x - a.x);
       const tx = b.x - Math.cos(angle) * NODE_RADIUS;
       const ty = b.y - Math.sin(angle) * NODE_RADIUS;
       const ah = isFocused ? 7 : 6;
-      ctx.fillStyle = isFocused ? accent : gridline;
+      ctx.fillStyle = edgeColor;
       ctx.beginPath();
       ctx.moveTo(tx, ty);
       ctx.lineTo(tx - ah * Math.cos(angle - 0.4), ty - ah * Math.sin(angle - 0.4));
@@ -472,7 +527,7 @@
       ctx.fillStyle = surface;
       roundRect(mx - textW / 2 - 4, my - 8, textW + 8, 16, 4);
       ctx.fill();
-      ctx.fillStyle = isFocused ? accent : textSecondary;
+      ctx.fillStyle = isForbidden ? errorColor : (isFocused ? accent : textSecondary);
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(e.type, mx, my);
