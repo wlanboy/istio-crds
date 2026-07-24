@@ -30,7 +30,7 @@ services:
       - "--server.endpoint=tcp://arangodb:8529"
       - "--server.password=${ARANGO_ROOT_PASSWORD:-changeme123}"
       - "--javascript.execute=/init/create-istio-db.js"
-      - "${ISTIO_DB:-istio}"
+      - "${ISTIO_DB:-istio},${ISTIO_CONNECTIONS_DB:-istio-connections}"
       - "${ISTIO_USER:-istio}"
       - "${ISTIO_PASSWORD:-changeme123}"
 
