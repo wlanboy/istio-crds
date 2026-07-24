@@ -155,6 +155,31 @@ html, body {
 }
 #disconnect-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
 
+/* Tabs */
+#tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+}
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active {
+  color: var(--text-primary);
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
 #graph-scroll {
   flex: 1;
   overflow: auto;
