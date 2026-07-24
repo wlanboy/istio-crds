@@ -12,6 +12,9 @@ from kubernetes.client import (
     V1CustomResourceDefinitionSpec,
     V1CustomResourceDefinitionStatus,
     V1CustomResourceDefinitionVersion,
+    V1Deployment,
+    V1DeploymentList,
+    V1DeploymentSpec,
     V1IPBlock,
     V1LabelSelector,
     V1Namespace,
@@ -27,6 +30,7 @@ from kubernetes.client import (
     V1Pod,
     V1PodList,
     V1PodSpec,
+    V1PodTemplateSpec,
     V1Service,
     V1ServiceAccount,
     V1ServiceAccountList,
@@ -234,6 +238,48 @@ def test_get_pods_handles_missing_spec():
     with patch.object(kubectl.client, "CoreV1Api", return_value=v1):
         result = kubectl.get_pods()
     assert result == [kubectl.PodInfo(name="ghost", namespace="default", labels={}, service_account=None)]
+
+
+# ---------------------------------------------------------------------------
+# Deployments
+# ---------------------------------------------------------------------------
+
+def test_get_deployments_extracts_template_labels_and_service_account():
+    dep = V1Deployment(
+        metadata=V1ObjectMeta(name="httpbin", namespace="default"),
+        spec=V1DeploymentSpec(
+            selector=V1LabelSelector(match_labels={"app": "httpbin"}),
+            template=V1PodTemplateSpec(
+                metadata=V1ObjectMeta(labels={"app": "httpbin", "version": "v1"}),
+                spec=V1PodSpec(containers=[], service_account_name="httpbin"),
+            ),
+        ),
+    )
+    apps = MagicMock()
+    apps.list_namespaced_deployment.return_value = V1DeploymentList(items=[dep])
+    with patch.object(kubectl.client, "AppsV1Api", return_value=apps):
+        result = kubectl.get_deployments(namespace="default")
+    assert result == [
+        kubectl.DeploymentInfo(
+            name="httpbin", namespace="default",
+            labels={"app": "httpbin", "version": "v1"}, service_account="httpbin",
+        ),
+    ]
+
+
+def test_get_deployments_handles_missing_template():
+    dep = V1Deployment(
+        metadata=V1ObjectMeta(name="ghost", namespace="default"),
+        spec=V1DeploymentSpec(
+            selector=V1LabelSelector(match_labels={"app": "ghost"}),
+            template=V1PodTemplateSpec(metadata=None, spec=None),
+        ),
+    )
+    apps = MagicMock()
+    apps.list_deployment_for_all_namespaces.return_value = V1DeploymentList(items=[dep])
+    with patch.object(kubectl.client, "AppsV1Api", return_value=apps):
+        result = kubectl.get_deployments()
+    assert result == [kubectl.DeploymentInfo(name="ghost", namespace="default", labels={}, service_account=None)]
 
 
 # ---------------------------------------------------------------------------

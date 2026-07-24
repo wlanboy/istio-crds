@@ -11,6 +11,7 @@ from kubernetes import client, config
 from kubernetes.client import (
     V1ConfigMap,
     V1CustomResourceDefinitionList,
+    V1DeploymentList,
     V1Namespace,
     V1NamespaceList,
     V1NetworkPolicyList,
@@ -244,6 +245,51 @@ def get_pods(namespace: str | None = None) -> list[PodInfo]:
         )
         for pod in (pod_list.items or [])
     ]
+
+
+# ---------------------------------------------------------------------------
+# Deployment listing
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DeploymentInfo:
+    name: str
+    namespace: str
+    labels: dict[str, str] = field(default_factory=dict)
+    service_account: str | None = None
+
+
+def get_deployments(namespace: str | None = None) -> list[DeploymentInfo]:
+    """List Kubernetes Deployments, optionally restricted to one namespace.
+
+    ``labels`` are the pod template's labels (``spec.template.metadata.labels``)
+    rather than ``spec.selector.matchLabels`` — it's the template labels that
+    actual Service/Sidecar/AuthorizationPolicy selectors are matched against,
+    since those match live Pod labels, not the Deployment's own (typically
+    narrower) selector.
+    """
+    apps = client.AppsV1Api()
+    if namespace is not None:
+        dep_list = cast(
+            V1DeploymentList,
+            apps.list_namespaced_deployment(namespace, _request_timeout=_REQUEST_TIMEOUT),
+        )
+    else:
+        dep_list = cast(
+            V1DeploymentList, apps.list_deployment_for_all_namespaces(_request_timeout=_REQUEST_TIMEOUT),
+        )
+    result: list[DeploymentInfo] = []
+    for dep in (dep_list.items or []):
+        template = dep.spec.template if dep.spec else None
+        template_meta = template.metadata if template else None
+        template_spec = template.spec if template else None
+        result.append(DeploymentInfo(
+            name=dep.metadata.name,
+            namespace=dep.metadata.namespace,
+            labels=dict(template_meta.labels or {}) if template_meta else {},
+            service_account=template_spec.service_account_name if template_spec else None,
+        ))
+    return result
 
 
 # ---------------------------------------------------------------------------
