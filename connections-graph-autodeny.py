@@ -448,7 +448,7 @@ def _add_deny_policy_labels(
             ap, deployments=deployments, services=services, mesh_root_namespace=mesh_root_namespace,
         )
         if not targets:
-            logger.debug(
+            logger.warning(
                 "AuthorizationPolicy(%s) %s/%s betrifft laut Selector/targetRefs/Namespace kein "
                 "geladenes Deployment - kein deny_policies-Label (Selector/targetRefs prüfen, oder "
                 "ob das Deployment überhaupt im abgefragten Namespace-Scope geladen wurde)",
@@ -475,7 +475,7 @@ def _add_deny_policy_labels(
                 target_id, ("selects", "resolves_to"), "deny_policies", policy_label,
             )
             if annotated == 0:
-                logger.debug(
+                logger.warning(
                     "AuthorizationPolicy(%s) %s/%s betrifft Deployment %s, aber dafür existiert keine "
                     "selects/resolves_to-Kante im Graphen (kein Service selektiert es?) - kein "
                     "deny_policies-Label möglich",
