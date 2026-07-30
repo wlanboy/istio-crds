@@ -307,6 +307,100 @@ def test_add_forbidden_edges_ignores_allow_policies(cg):
 
 
 # ---------------------------------------------------------------------------
+# AuthorizationPolicy(ALLOW) -> Kanten-Label
+# ---------------------------------------------------------------------------
+
+def test_add_allow_policy_labels_annotates_existing_selects_edge(cg):
+    g = cg.GraphBuilder()
+    deployments = [kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"})]
+    services = [kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"})]
+    g.add_node("deployment", "httpbin", "default")
+    g.add_node("service", "httpbin", "default")
+    g.add_edge("service:default/httpbin", "deployment:default/httpbin", "selects")
+    ap = AuthorizationPolicyInfo(
+        name="allow-sleep", namespace="default", action="ALLOW", selector={"app": "httpbin"},
+        rules=[AuthorizationRule(from_namespaces=["default"])],
+    )
+    cg._add_allow_policy_labels(
+        g, authorization_policies=[ap], deployments=deployments, services=services,
+        mesh_root_namespace="istio-system",
+    )
+    graph = g.build()
+    edge = next(
+        e for e in graph["edges"]
+        if e["source"] == "service:default/httpbin" and e["target"] == "deployment:default/httpbin"
+    )
+    assert edge["attributes"]["allow_policies"] == [{
+        "name": "allow-sleep",
+        "namespace": "default",
+        "rules": [{"from_namespaces": ["default"], "from_principals": [], "to_hosts": []}],
+    }]
+
+
+def test_add_allow_policy_labels_does_not_add_edges_or_nodes(cg):
+    g = cg.GraphBuilder()
+    deployments = [kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"})]
+    g.add_node("deployment", "httpbin", "default")
+    ap = AuthorizationPolicyInfo(
+        name="allow-sleep", namespace="default", action="ALLOW", selector={"app": "httpbin"},
+        rules=[AuthorizationRule(from_namespaces=["default"])],
+    )
+    cg._add_allow_policy_labels(
+        g, authorization_policies=[ap], deployments=deployments, services=[],
+        mesh_root_namespace="istio-system",
+    )
+    graph = g.build()
+    assert graph["edges"] == []
+    assert [n["id"] for n in graph["nodes"]] == ["deployment:default/httpbin"]
+
+
+def test_add_allow_policy_labels_skips_default_deny_style_empty_rule(cg):
+    g = cg.GraphBuilder()
+    deployments = [kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"})]
+    services = [kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"})]
+    g.add_node("deployment", "httpbin", "default")
+    g.add_node("service", "httpbin", "default")
+    g.add_edge("service:default/httpbin", "deployment:default/httpbin", "selects")
+    ap = AuthorizationPolicyInfo(
+        name="allow-all", namespace="default", action="ALLOW",
+        selector={"app": "httpbin"}, rules=[AuthorizationRule()],
+    )
+    cg._add_allow_policy_labels(
+        g, authorization_policies=[ap], deployments=deployments, services=services,
+        mesh_root_namespace="istio-system",
+    )
+    graph = g.build()
+    edge = next(
+        e for e in graph["edges"]
+        if e["source"] == "service:default/httpbin" and e["target"] == "deployment:default/httpbin"
+    )
+    assert "allow_policies" not in edge["attributes"]
+
+
+def test_add_allow_policy_labels_ignores_deny_policies(cg):
+    g = cg.GraphBuilder()
+    deployments = [kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"})]
+    services = [kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"})]
+    g.add_node("deployment", "httpbin", "default")
+    g.add_node("service", "httpbin", "default")
+    g.add_edge("service:default/httpbin", "deployment:default/httpbin", "selects")
+    ap = AuthorizationPolicyInfo(
+        name="deny-sleep", namespace="default", action="DENY", selector={"app": "httpbin"},
+        rules=[AuthorizationRule(from_namespaces=["default"])],
+    )
+    cg._add_allow_policy_labels(
+        g, authorization_policies=[ap], deployments=deployments, services=services,
+        mesh_root_namespace="istio-system",
+    )
+    graph = g.build()
+    edge = next(
+        e for e in graph["edges"]
+        if e["source"] == "service:default/httpbin" and e["target"] == "deployment:default/httpbin"
+    )
+    assert "allow_policies" not in edge["attributes"]
+
+
+# ---------------------------------------------------------------------------
 # build_graph (integration, mit gemockter Datenerfassungsschicht)
 # ---------------------------------------------------------------------------
 

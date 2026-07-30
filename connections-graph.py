@@ -24,7 +24,12 @@ Modell
   herangezogen: eine Menge erlaubter Aufrufer zu berechnen würde zwangsläufig
   alle dadurch implizit verbotenen Verbindungen sichtbar machen (z. B. über
   eine leere "default-deny" Policy) — das ist laut Vorgabe explizit
-  unerwünscht.
+  unerwünscht. Rein informativ (ohne neue Kanten/Knoten und ohne etwas zu
+  filtern) bekommen bereits bestehende Kanten, die auf ein von einer
+  AuthorizationPolicy(ALLOW) betroffenes Deployment zeigen (``selects``/
+  ``resolves_to``), zusätzlich ein ``allow_policies``-Attribut mit Name und
+  Regeln der jeweiligen Policy — als Erklärung, warum diese Verbindung
+  (zusätzlich zum ohnehin als "möglich" markierten Pfad) erlaubt ist.
 - Nur AuthorizationPolicy(DENY)-Regeln mit tatsächlichem Inhalt (from/to
   nicht komplett leer) erzeugen zusätzliche Kanten mit relation="forbidden":
   von der aufgelösten Quelle über die Policy zum betroffenen Deployment. Eine
@@ -134,6 +139,20 @@ class GraphBuilder:
         key = (source, target, relation)
         if key not in self._edges:
             self._edges[key] = Edge(source=source, target=target, relation=relation, attributes=attributes)
+
+    def annotate_incoming_edges(
+        self, target: str, relations: tuple[str, ...], key: str, value: object,
+    ) -> None:
+        """Hängt ``value`` an das ``key``-Attribut (eine Liste) jeder bereits
+        bestehenden Kante mit dem gegebenen Ziel und einer der gegebenen
+        Relationen an. Erzeugt bewusst keine neue Kante/Knoten und entfernt
+        keine bestehende — rein additive Beschriftung."""
+        for edge in self._edges.values():
+            if edge.target != target or edge.relation not in relations:
+                continue
+            values = edge.attributes.setdefault(key, [])
+            if value not in values:
+                values.append(value)
 
     def build(self) -> dict[str, object]:
         # Rückwärts-Fixpunkt: ein Knoten "kann ein Deployment erreichen", wenn
@@ -327,6 +346,49 @@ def _add_forbidden_edges(
 
 
 # ---------------------------------------------------------------------------
+# AuthorizationPolicy(ALLOW) -> rein informatives Kanten-Label
+# ---------------------------------------------------------------------------
+
+def _add_allow_policy_labels(
+    g: GraphBuilder, *, authorization_policies: list[AuthorizationPolicyInfo],
+    deployments: list[DeploymentInfo], services: list[ServiceInfo], mesh_root_namespace: str,
+) -> None:
+    """Beschriftet bereits bestehende Kanten, die auf ein Deployment zeigen
+    (``selects``/``resolves_to``), zusätzlich mit den AuthorizationPolicy(ALLOW)
+    -Regeln, die dieses Deployment betreffen. Es werden bewusst keine neuen
+    Kanten/Knoten erzeugt und keine Kante gefiltert — das würde implizit ein
+    Verbots-Set sichtbar machen (siehe Moduldokumentation). Wie bei DENY wird
+    eine völlig leere Regel (kein from, kein to) übersprungen, da sie nichts
+    Konkretes über eine bestimmte Verbindung aussagt."""
+    for ap in authorization_policies:
+        if ap.action != "ALLOW":
+            continue
+        meaningful_rules = [r for r in ap.rules if r.from_namespaces or r.from_principals or r.to_hosts]
+        if not meaningful_rules:
+            continue
+        targets = _authz_policy_targets(
+            ap, deployments=deployments, services=services, mesh_root_namespace=mesh_root_namespace,
+        )
+        if not targets:
+            continue
+        policy_label = {
+            "name": ap.name,
+            "namespace": ap.namespace,
+            "rules": [
+                {
+                    "from_namespaces": r.from_namespaces,
+                    "from_principals": r.from_principals,
+                    "to_hosts": r.to_hosts,
+                }
+                for r in meaningful_rules
+            ],
+        }
+        for target in targets:
+            target_id = f"deployment:{target.namespace}/{target.name}"
+            g.annotate_incoming_edges(target_id, ("selects", "resolves_to"), "allow_policies", policy_label)
+
+
+# ---------------------------------------------------------------------------
 # "Mögliche" Verbindungen: Gateway/Deployment -> ... -> Deployment
 # ---------------------------------------------------------------------------
 
@@ -449,6 +511,10 @@ def build_graph(namespace: str | None) -> dict[str, object]:
         service_entries=resources.service_entries, deployments=deployments,
     )
     _add_forbidden_edges(
+        g, authorization_policies=resources.authorization_policies, deployments=deployments,
+        services=services, mesh_root_namespace=mesh_root_namespace,
+    )
+    _add_allow_policy_labels(
         g, authorization_policies=resources.authorization_policies, deployments=deployments,
         services=services, mesh_root_namespace=mesh_root_namespace,
     )
