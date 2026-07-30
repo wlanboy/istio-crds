@@ -36,14 +36,21 @@ Modell
   zählen bewusst NICHT als default-deny, auch wenn ihre Regeln leer
   erscheinen — u. a. weil ``AuthorizationRule`` nur from/to.hosts abbildet
   und eine Regel, die z. B. nur nach HTTP-Methode/Pfad einschränkt, sonst
-  fälschlich als "leer" durchginge. Für default-deny geschützte Deployments
-  werden die sonst unbedingt geltenden Erreichbarkeits-Kanten (service
-  "selects", serviceentry "resolves_to") aus dem Graphen entfernt — übrig
-  bleiben nur noch explizite "allowed"-Kanten (aus einer passenden
-  ALLOW-Regel) sowie "forbidden"-Kanten aus einer NICHT-default-deny
-  DENY-Regel. Ohne passende ALLOW-Regel ist ein solches Deployment im
-  Graphen dadurch isoliert (keine eingehenden Kanten mehr) — das bildet ab,
-  dass es effektiv für niemanden mehr erreichbar ist.
+  fälschlich als "leer" durchginge. Für ein default-deny geschütztes
+  Deployment OHNE jede AuthorizationPolicy(ALLOW) wird die sonst unbedingt
+  geltende Erreichbarkeits-Kante (service "selects", serviceentry
+  "resolves_to") aus dem Graphen entfernt — es ist im Graphen dadurch
+  isoliert (keine eingehenden Kanten mehr), was abbildet, dass es effektiv
+  für niemanden mehr erreichbar ist. Existiert dagegen mindestens eine
+  AuthorizationPolicy(ALLOW) mit tatsächlichem Inhalt für dieses Deployment
+  (der übliche Aufbau: Namespace-weite deny-all Baseline + gezielte
+  Service-ALLOW-Policy), bleibt die technische Kante erhalten und zusätzlich
+  erscheint die explizite "allowed"-Kante der ALLOW-Regel — sonst würde
+  bereits eine einzige mesh-/namespace-weite Baseline-Policy den gesamten
+  Service-/Gateway-/VirtualService-Zwischenlayer aus dem Graphen tilgen
+  (jeder Service, dessen einzige erreichbaren Deployments default-deny
+  geschützt sind, würde sonst vom Erreichbarkeits-Fixpunkt in
+  ``GraphBuilder.build`` als Sackgasse entfernt).
 - ServiceAccounts sind kein eigener Knoten mehr, sondern ein Attribut
   (``service_account``) direkt am jeweiligen Deployment-Knoten.
 
@@ -366,6 +373,38 @@ def _default_deny_targets(
     return target_ids
 
 
+def _targets_with_explicit_allow(
+    authorization_policies: list[AuthorizationPolicyInfo], *, deployments: list[DeploymentInfo],
+    services: list[ServiceInfo], mesh_root_namespace: str,
+) -> set[str]:
+    """Liefert die IDs aller Deployments, für die mindestens eine
+    AuthorizationPolicy(ALLOW) mit tatsächlichem Inhalt existiert — unabhängig
+    davon, ob diese Quelle zur konkret betrachteten Kante passt. Für ein
+    default-deny geschütztes Deployment mit mindestens einem solchen Treffer
+    bleibt die technische Erreichbarkeits-Kante (service "selects",
+    serviceentry "resolves_to") im Graphen erhalten: der übliche Aufbau ist
+    "Namespace-weite deny-all Baseline + gezielte Service-ALLOW-Policy", und
+    ohne diese Ausnahme würde bereits eine einzige mesh-/namespace-weite
+    Baseline-Policy den ganzen Service-/Gateway-/VirtualService-Zwischenlayer
+    aus dem Graphen tilgen (jeder Service, dessen einzige erreichbaren
+    Deployments default-deny geschützt sind, wird sonst vom
+    Erreichbarkeits-Fixpunkt in ``GraphBuilder.build`` als Sackgasse
+    entfernt). Die fehlende Quell-Granularität ist dieselbe bewusste
+    Vereinfachung wie bei den unbedingten "may_call"-Kanten."""
+    target_ids: set[str] = set()
+    for ap in authorization_policies:
+        if ap.action != "ALLOW":
+            continue
+        meaningful_rules = [r for r in ap.rules if r.from_namespaces or r.from_principals or r.to_hosts]
+        if not meaningful_rules:
+            continue
+        for target in _authz_policy_targets(
+            ap, deployments=deployments, services=services, mesh_root_namespace=mesh_root_namespace,
+        ):
+            target_ids.add(f"deployment:{target.namespace}/{target.name}")
+    return target_ids
+
+
 def _add_authz_rule_edges(
     g: GraphBuilder, *, authorization_policies: list[AuthorizationPolicyInfo],
     deployments: list[DeploymentInfo], services: list[ServiceInfo], mesh_root_namespace: str,
@@ -523,14 +562,26 @@ def build_graph(namespace: str | None) -> dict[str, object]:
         service_entries=resources.service_entries, deployments=deployments,
     )
 
-    # Deployments unter einer default-deny Policy verlieren ihre unbedingt
-    # geltenden Erreichbarkeits-Kanten — übrig bleiben nur noch explizite
-    # "allowed"-/"forbidden"-Kanten (s.u.).
+    # Deployments unter einer default-deny Policy ganz ohne jede
+    # AuthorizationPolicy(ALLOW) verlieren ihre unbedingt geltenden
+    # Erreichbarkeits-Kanten (sie sind schlicht für niemanden erreichbar).
+    # Existiert dagegen mindestens eine ALLOW-Policy für das Deployment (der
+    # übliche Aufbau: Namespace-weite deny-all Baseline + gezielte
+    # Service-ALLOW-Policy), bleibt die technische Kante erhalten — sonst
+    # würde bereits eine einzige mesh-/namespace-weite Baseline-Policy den
+    # gesamten Service-/Gateway-/VirtualService-Zwischenlayer aus dem
+    # Graphen tilgen (siehe ``_targets_with_explicit_allow``). Die
+    # zusätzliche explizite "allowed"-Kante (s. u.) zeigt trotzdem, welche
+    # Quelle konkret erlaubt ist.
     default_deny_targets = _default_deny_targets(
         resources.authorization_policies, deployments=deployments,
         services=services, mesh_root_namespace=mesh_root_namespace,
     )
-    g.remove_edges_into(default_deny_targets, {"selects", "resolves_to"})
+    allowed_targets = _targets_with_explicit_allow(
+        resources.authorization_policies, deployments=deployments,
+        services=services, mesh_root_namespace=mesh_root_namespace,
+    )
+    g.remove_edges_into(default_deny_targets - allowed_targets, {"selects", "resolves_to"})
 
     _add_authz_rule_edges(
         g, authorization_policies=resources.authorization_policies, deployments=deployments,
