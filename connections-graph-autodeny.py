@@ -20,37 +20,28 @@ Modell
   diese Route tatsächlich nutzt (daher z. B. immer eine Kante von *jedem*
   Deployment zu einem direkt erreichbaren Service, nicht nur von den
   Deployments, die ihn im Betrieb tatsächlich aufrufen).
-- AuthorizationPolicy(DENY)-Regeln mit tatsächlichem Inhalt (from/to nicht
-  komplett leer) erzeugen zusätzliche Kanten mit relation="forbidden": von
-  der aufgelösten Quelle über die Policy zum betroffenen Deployment.
-  Symmetrisch erzeugen AuthorizationPolicy(ALLOW)-Regeln mit tatsächlichem
-  Inhalt Kanten mit relation="allowed".
-- Ein Deployment gilt als "default-deny geschützt", wenn es von der einen
-  breiten "deny all"-Baseline-Policy erfasst wird, die üblicherweise pro
-  Namespace (oder mesh-weit im Root-Namespace) angelegt wird: einer
-  AuthorizationPolicy ganz ohne Selector/targetRefs, die entweder als ALLOW
-  ganz ohne Regeln (das offizielle Istio-Muster für "alles verbieten": ohne
-  Regel matcht nichts, also ist nichts erlaubt) oder als DENY mit mindestens
-  einer komplett leeren Regel (matcht alles, verbietet also alles) vorliegt.
-  Gezielt auf einzelne Workloads gescopte Policies (mit Selector/targetRefs)
-  zählen bewusst NICHT als default-deny, auch wenn ihre Regeln leer
-  erscheinen — u. a. weil ``AuthorizationRule`` nur from/to.hosts abbildet
-  und eine Regel, die z. B. nur nach HTTP-Methode/Pfad einschränkt, sonst
-  fälschlich als "leer" durchginge. Für ein default-deny geschütztes
-  Deployment OHNE jede AuthorizationPolicy(ALLOW) wird die sonst unbedingt
-  geltende Erreichbarkeits-Kante (service "selects", serviceentry
-  "resolves_to") aus dem Graphen entfernt — es ist im Graphen dadurch
-  isoliert (keine eingehenden Kanten mehr), was abbildet, dass es effektiv
-  für niemanden mehr erreichbar ist. Existiert dagegen mindestens eine
-  AuthorizationPolicy(ALLOW) mit tatsächlichem Inhalt für dieses Deployment
-  (der übliche Aufbau: Namespace-weite deny-all Baseline + gezielte
-  Service-ALLOW-Policy), bleibt die technische Kante erhalten und zusätzlich
-  erscheint die explizite "allowed"-Kante der ALLOW-Regel — sonst würde
-  bereits eine einzige mesh-/namespace-weite Baseline-Policy den gesamten
-  Service-/Gateway-/VirtualService-Zwischenlayer aus dem Graphen tilgen
-  (jeder Service, dessen einzige erreichbaren Deployments default-deny
-  geschützt sind, würde sonst vom Erreichbarkeits-Fixpunkt in
-  ``GraphBuilder.build`` als Sackgasse entfernt).
+- AuthorizationPolicy(ALLOW) wird für diesen Graphen NICHT als Filter
+  herangezogen: eine Menge erlaubter Aufrufer zu berechnen würde zwangsläufig
+  alle dadurch implizit verbotenen Verbindungen sichtbar machen (z. B. über
+  eine leere "default-deny" Policy) — das ist laut Vorgabe explizit
+  unerwünscht. Rein informativ (ohne neue Kanten/Knoten und ohne etwas zu
+  filtern) bekommen bereits bestehende Kanten, die auf ein von einer
+  AuthorizationPolicy(ALLOW) betroffenes Deployment zeigen (``selects``/
+  ``resolves_to``), zusätzlich ein ``allow_policies``-Attribut mit Name und
+  Regeln der jeweiligen Policy — als Erklärung, warum diese Verbindung
+  (zusätzlich zum ohnehin als "möglich" markierten Pfad) erlaubt ist.
+- Nur AuthorizationPolicy(DENY)-Regeln mit tatsächlichem Inhalt (from/to
+  nicht komplett leer) erzeugen zusätzliche Kanten mit relation="forbidden":
+  von der aufgelösten Quelle über die Policy zum betroffenen Deployment. Eine
+  komplett leere Regel (das "default-deny"-Muster: eine Policy ohne jede
+  Einschränkung) wird ignoriert und erzeugt keine Kante — dieses Filter-
+  verhalten bleibt unverändert. Zusätzlich (und unabhängig davon) wird JEDE
+  AuthorizationPolicy(DENY), die ein Deployment betrifft — auch mit einer
+  völlig leeren "default-deny"-Regel, die für die "forbidden"-Kante oben
+  ignoriert wird —, rein informativ als ``deny_policies``-Attribut an den
+  bestehenden ``selects``/``resolves_to``-Kanten in dieses Deployment
+  vermerkt. Auch das entfernt oder erzeugt keine Kante; es macht nur
+  sichtbar, dass/unter welcher Policy ein Deployment überhaupt steht.
 - ServiceAccounts sind kein eigener Knoten mehr, sondern ein Attribut
   (``service_account``) direkt am jeweiligen Deployment-Knoten.
 
@@ -63,14 +54,13 @@ istio-graph.py rein über den Namen in ``spec.gateways`` aufgelöst, ohne
 zusätzlichen Abgleich der exponierten Hosts.
 
 Eine wichtige Designentscheidung:
-ALLOW-AuthorizationPolicies fließen nur dort in den Graphen ein, wo sie
-tatsächlich etwas zeigen: als explizite "allowed"-Kante für eine konkrete
-ALLOW-Regel, und als Auflöser dafür, welche sonst unbedingt geltenden
-Erreichbarkeits-Kanten wegen einer default-deny Policy entfernt werden
-müssen. Es wird weiterhin keine vollständige Menge "aller erlaubten
-Aufrufer" für Deployments ohne default-deny berechnet — dort bleibt die
-technische Erreichbarkeit (may_call/selects/resolves_to) wie bisher
-unbedingt bestehen, unabhängig von eventuell vorhandenen ALLOW-Policies.
+ALLOW-AuthorizationPolicies fließen gar nicht in den Graphen ein, weder als Filter noch als Knoten. 
+Grund: 
+Eine Menge erlaubter Aufrufer zu berechnen würde zwangsläufig alle impliziten Verbote sichtbar machen 
+(genau das, was laut Vorgabe nicht gezeigt werden soll). 
+Falls doch explizite ALLOW-Listen die "möglich"-Kanten einschränken (nur eben ohne die implizite Restmenge zu zeigen), 
+lässt sich das nachrüsten, ist aber pro Ziel-Deployment nicht immer eindeutig graphdarstellbar, 
+wenn ein Service mehrere Deployments mit unterschiedlichen Policies bedient.
 """
 from __future__ import annotations
 
@@ -157,15 +147,19 @@ class GraphBuilder:
         if key not in self._edges:
             self._edges[key] = Edge(source=source, target=target, relation=relation, attributes=attributes)
 
-    def remove_edges_into(self, target_ids: set[str], relations: set[str]) -> None:
-        """Entfernt alle Kanten mit einer der angegebenen Relationen, deren
-        Ziel in ``target_ids`` liegt — genutzt, um die unbedingt geltenden
-        Erreichbarkeits-Kanten in default-deny geschützte Deployments zu
-        tilgen (siehe ``_default_deny_targets``)."""
-        self._edges = {
-            key: e for key, e in self._edges.items()
-            if not (e.target in target_ids and e.relation in relations)
-        }
+    def annotate_incoming_edges(
+        self, target: str, relations: tuple[str, ...], key: str, value: object,
+    ) -> None:
+        """Hängt ``value`` an das ``key``-Attribut (eine Liste) jeder bereits
+        bestehenden Kante mit dem gegebenen Ziel und einer der gegebenen
+        Relationen an. Erzeugt bewusst keine neue Kante/Knoten und entfernt
+        keine bestehende — rein additive Beschriftung."""
+        for edge in self._edges.values():
+            if edge.target != target or edge.relation not in relations:
+                continue
+            values = edge.attributes.setdefault(key, [])
+            if value not in values:
+                values.append(value)
 
     def build(self) -> dict[str, object]:
         # Rückwärts-Fixpunkt: ein Knoten "kann ein Deployment erreichen", wenn
@@ -277,7 +271,7 @@ def _service_entry_backing_deployments(
 
 
 # ---------------------------------------------------------------------------
-# AuthorizationPolicy -> "forbidden"-/"allowed"-Kanten, default-deny
+# AuthorizationPolicy(DENY) -> "forbidden"-Kanten
 # ---------------------------------------------------------------------------
 
 def _authz_policy_targets(
@@ -328,98 +322,17 @@ def _resolve_rule_sources(rule: AuthorizationRule, deployments: list[DeploymentI
     return list(sources.values())
 
 
-def _is_default_deny_policy(ap: AuthorizationPolicyInfo) -> bool:
-    """Erkennt die eine "deny all"-Baseline-Policy, die pro Namespace bzw.
-    mesh-weit üblich ist: eine Policy ganz ohne Selector/targetRefs (gilt für
-    den gesamten Namespace, oder mesh-weit, falls sie im Root-Namespace
-    liegt — siehe ``_authz_policy_targets``), und zusätzlich entweder eine
-    ALLOW-Policy ganz ohne Regeln (nichts matcht, also ist nichts erlaubt —
-    das offizielle Istio-Muster für default-deny) oder eine DENY-Policy mit
-    mindestens einer komplett leeren Regel (matcht alles, verbietet also
-    alles). Eine gezielt auf einzelne Workloads gescopte Policy (mit
-    Selector/targetRefs) zählt bewusst NICHT als default-deny — nur die eine
-    breite Baseline-Policy soll die sonst unbedingte Erreichbarkeit
-    einschränken, nicht jede einzelne, ggf. nur unvollständig geparste
-    Workload-Regel (z. B. eine Regel, die nur nach HTTP-Methode/Pfad
-    einschränkt — das bildet ``AuthorizationRule`` nicht ab und würde sonst
-    fälschlich als "leer" durchgehen). Eine DENY-Policy ganz ohne Regeln ist
-    außerdem ein No-op (nichts matcht, also wird auch nichts verboten) und
-    zählt hier ebenfalls nicht."""
-    if ap.has_selector:
-        return False
-    if ap.action == "ALLOW":
-        return not ap.rules
-    if ap.action == "DENY":
-        return any(not (r.from_namespaces or r.from_principals or r.to_hosts) for r in ap.rules)
-    return False
-
-
-def _default_deny_targets(
-    authorization_policies: list[AuthorizationPolicyInfo], *, deployments: list[DeploymentInfo],
-    services: list[ServiceInfo], mesh_root_namespace: str,
-) -> set[str]:
-    """Liefert die IDs aller Deployments, die durch mindestens eine
-    default-deny Policy (siehe ``_is_default_deny_policy``) geschützt sind —
-    für diese werden die sonst unbedingt geltenden Erreichbarkeits-Kanten aus
-    dem Graphen entfernt (siehe ``build_graph``)."""
-    target_ids: set[str] = set()
-    for ap in authorization_policies:
-        if not _is_default_deny_policy(ap):
-            continue
-        for target in _authz_policy_targets(
-            ap, deployments=deployments, services=services, mesh_root_namespace=mesh_root_namespace,
-        ):
-            target_ids.add(f"deployment:{target.namespace}/{target.name}")
-    return target_ids
-
-
-def _targets_with_explicit_allow(
-    authorization_policies: list[AuthorizationPolicyInfo], *, deployments: list[DeploymentInfo],
-    services: list[ServiceInfo], mesh_root_namespace: str,
-) -> set[str]:
-    """Liefert die IDs aller Deployments, für die mindestens eine
-    AuthorizationPolicy(ALLOW) mit tatsächlichem Inhalt existiert — unabhängig
-    davon, ob diese Quelle zur konkret betrachteten Kante passt. Für ein
-    default-deny geschütztes Deployment mit mindestens einem solchen Treffer
-    bleibt die technische Erreichbarkeits-Kante (service "selects",
-    serviceentry "resolves_to") im Graphen erhalten: der übliche Aufbau ist
-    "Namespace-weite deny-all Baseline + gezielte Service-ALLOW-Policy", und
-    ohne diese Ausnahme würde bereits eine einzige mesh-/namespace-weite
-    Baseline-Policy den ganzen Service-/Gateway-/VirtualService-Zwischenlayer
-    aus dem Graphen tilgen (jeder Service, dessen einzige erreichbaren
-    Deployments default-deny geschützt sind, wird sonst vom
-    Erreichbarkeits-Fixpunkt in ``GraphBuilder.build`` als Sackgasse
-    entfernt). Die fehlende Quell-Granularität ist dieselbe bewusste
-    Vereinfachung wie bei den unbedingten "may_call"-Kanten."""
-    target_ids: set[str] = set()
-    for ap in authorization_policies:
-        if ap.action != "ALLOW":
-            continue
-        meaningful_rules = [r for r in ap.rules if r.from_namespaces or r.from_principals or r.to_hosts]
-        if not meaningful_rules:
-            continue
-        for target in _authz_policy_targets(
-            ap, deployments=deployments, services=services, mesh_root_namespace=mesh_root_namespace,
-        ):
-            target_ids.add(f"deployment:{target.namespace}/{target.name}")
-    return target_ids
-
-
-def _add_authz_rule_edges(
+def _add_forbidden_edges(
     g: GraphBuilder, *, authorization_policies: list[AuthorizationPolicyInfo],
     deployments: list[DeploymentInfo], services: list[ServiceInfo], mesh_root_namespace: str,
-    action: str, relation: str,
 ) -> None:
-    """Bildet AuthorizationPolicy-Regeln mit tatsächlichem Inhalt (from/to
-    nicht komplett leer) als Kanten ab: von der aufgelösten Quelle über die
-    Policy zum betroffenen Deployment, mit ``relation`` (z. B. "forbidden"
-    für DENY, "allowed" für ALLOW). Eine komplett leere Regel (das
-    "default-deny"-Muster, siehe ``_is_default_deny_policy``) wird ignoriert
-    und erzeugt keine Kante — sie wirkt stattdessen über
-    ``_default_deny_targets``."""
     for ap in authorization_policies:
-        if ap.action != action:
+        if ap.action != "DENY":
             continue
+        # Eine Regel ohne jede Einschränkung (weder from noch to) ist das
+        # "default-deny"-Muster — implizite Verbote sollen laut Vorgabe nicht
+        # gezeigt werden, also werden solche Regeln übersprungen. Eine Policy
+        # ganz ohne Regeln fällt automatisch mit heraus.
         meaningful_rules = [r for r in ap.rules if r.from_namespaces or r.from_principals or r.to_hosts]
         if not meaningful_rules:
             continue
@@ -435,8 +348,94 @@ def _add_authz_rule_edges(
                 target_id = f"deployment:{target.namespace}/{target.name}"
                 for source in sources:
                     source_id = f"deployment:{source.namespace}/{source.name}"
-                    g.add_edge(source_id, ap_id, relation)
-                    g.add_edge(ap_id, target_id, relation)
+                    g.add_edge(source_id, ap_id, "forbidden")
+                    g.add_edge(ap_id, target_id, "forbidden")
+
+
+# ---------------------------------------------------------------------------
+# AuthorizationPolicy(ALLOW) -> rein informatives Kanten-Label
+# ---------------------------------------------------------------------------
+
+def _add_allow_policy_labels(
+    g: GraphBuilder, *, authorization_policies: list[AuthorizationPolicyInfo],
+    deployments: list[DeploymentInfo], services: list[ServiceInfo], mesh_root_namespace: str,
+) -> None:
+    """Beschriftet bereits bestehende Kanten, die auf ein Deployment zeigen
+    (``selects``/``resolves_to``), zusätzlich mit den AuthorizationPolicy(ALLOW)
+    -Regeln, die dieses Deployment betreffen. Es werden bewusst keine neuen
+    Kanten/Knoten erzeugt und keine Kante gefiltert — das würde implizit ein
+    Verbots-Set sichtbar machen (siehe Moduldokumentation). Wie bei DENY wird
+    eine völlig leere Regel (kein from, kein to) übersprungen, da sie nichts
+    Konkretes über eine bestimmte Verbindung aussagt."""
+    for ap in authorization_policies:
+        if ap.action != "ALLOW":
+            continue
+        meaningful_rules = [r for r in ap.rules if r.from_namespaces or r.from_principals or r.to_hosts]
+        if not meaningful_rules:
+            continue
+        targets = _authz_policy_targets(
+            ap, deployments=deployments, services=services, mesh_root_namespace=mesh_root_namespace,
+        )
+        if not targets:
+            continue
+        policy_label = {
+            "name": ap.name,
+            "namespace": ap.namespace,
+            "rules": [
+                {
+                    "from_namespaces": r.from_namespaces,
+                    "from_principals": r.from_principals,
+                    "to_hosts": r.to_hosts,
+                }
+                for r in meaningful_rules
+            ],
+        }
+        for target in targets:
+            target_id = f"deployment:{target.namespace}/{target.name}"
+            g.annotate_incoming_edges(target_id, ("selects", "resolves_to"), "allow_policies", policy_label)
+
+
+# ---------------------------------------------------------------------------
+# AuthorizationPolicy(DENY) -> rein informatives Kanten-Label
+# ---------------------------------------------------------------------------
+
+def _add_deny_policy_labels(
+    g: GraphBuilder, *, authorization_policies: list[AuthorizationPolicyInfo],
+    deployments: list[DeploymentInfo], services: list[ServiceInfo], mesh_root_namespace: str,
+) -> None:
+    """Beschriftet bereits bestehende Kanten, die auf ein Deployment zeigen
+    (``selects``/``resolves_to``), zusätzlich mit den AuthorizationPolicy(DENY)
+    -Regeln, die dieses Deployment betreffen — im Unterschied zu
+    ``_add_forbidden_edges`` OHNE die "default-deny"-Regel (eine komplett
+    leere Regel, oder auch gar keine Regel) zu überspringen: hier soll
+    sichtbar bleiben, dass/warum ein Deployment überhaupt unter einer DENY-
+    Policy steht, selbst wenn diese (noch) keine konkrete Quelle benennt. Rein
+    informativ: es werden keine Kanten entfernt oder neu erzeugt, das
+    bestehende Filterverhalten von ``_add_forbidden_edges`` bleibt
+    unverändert."""
+    for ap in authorization_policies:
+        if ap.action != "DENY":
+            continue
+        targets = _authz_policy_targets(
+            ap, deployments=deployments, services=services, mesh_root_namespace=mesh_root_namespace,
+        )
+        if not targets:
+            continue
+        policy_label = {
+            "name": ap.name,
+            "namespace": ap.namespace,
+            "rules": [
+                {
+                    "from_namespaces": r.from_namespaces,
+                    "from_principals": r.from_principals,
+                    "to_hosts": r.to_hosts,
+                }
+                for r in ap.rules
+            ],
+        }
+        for target in targets:
+            target_id = f"deployment:{target.namespace}/{target.name}"
+            g.annotate_incoming_edges(target_id, ("selects", "resolves_to"), "deny_policies", policy_label)
 
 
 # ---------------------------------------------------------------------------
@@ -561,35 +560,17 @@ def build_graph(namespace: str | None) -> dict[str, object]:
         g, virtual_services=resources.virtual_services, services=services,
         service_entries=resources.service_entries, deployments=deployments,
     )
-
-    # Deployments unter einer default-deny Policy ganz ohne jede
-    # AuthorizationPolicy(ALLOW) verlieren ihre unbedingt geltenden
-    # Erreichbarkeits-Kanten (sie sind schlicht für niemanden erreichbar).
-    # Existiert dagegen mindestens eine ALLOW-Policy für das Deployment (der
-    # übliche Aufbau: Namespace-weite deny-all Baseline + gezielte
-    # Service-ALLOW-Policy), bleibt die technische Kante erhalten — sonst
-    # würde bereits eine einzige mesh-/namespace-weite Baseline-Policy den
-    # gesamten Service-/Gateway-/VirtualService-Zwischenlayer aus dem
-    # Graphen tilgen (siehe ``_targets_with_explicit_allow``). Die
-    # zusätzliche explizite "allowed"-Kante (s. u.) zeigt trotzdem, welche
-    # Quelle konkret erlaubt ist.
-    default_deny_targets = _default_deny_targets(
-        resources.authorization_policies, deployments=deployments,
+    _add_forbidden_edges(
+        g, authorization_policies=resources.authorization_policies, deployments=deployments,
         services=services, mesh_root_namespace=mesh_root_namespace,
     )
-    allowed_targets = _targets_with_explicit_allow(
-        resources.authorization_policies, deployments=deployments,
+    _add_allow_policy_labels(
+        g, authorization_policies=resources.authorization_policies, deployments=deployments,
         services=services, mesh_root_namespace=mesh_root_namespace,
     )
-    g.remove_edges_into(default_deny_targets - allowed_targets, {"selects", "resolves_to"})
-
-    _add_authz_rule_edges(
+    _add_deny_policy_labels(
         g, authorization_policies=resources.authorization_policies, deployments=deployments,
-        services=services, mesh_root_namespace=mesh_root_namespace, action="DENY", relation="forbidden",
-    )
-    _add_authz_rule_edges(
-        g, authorization_policies=resources.authorization_policies, deployments=deployments,
-        services=services, mesh_root_namespace=mesh_root_namespace, action="ALLOW", relation="allowed",
+        services=services, mesh_root_namespace=mesh_root_namespace,
     )
 
     return g.build()
@@ -599,10 +580,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Erstellt einen Deployment-zentrierten JSON-Verbindungsgraphen: welche "
                     "Deployment-zu-Deployment-Verbindungen sind über Gateway/Service/ServiceEntry/"
-                    "VirtualService möglich, welche sind explizit per AuthorizationPolicy(ALLOW) "
-                    "erlaubt (relation=\"allowed\") oder per AuthorizationPolicy(DENY) verboten "
-                    "(relation=\"forbidden\"). Für Deployments unter einer default-deny Policy "
-                    "werden die sonst unbedingten Erreichbarkeits-Kanten entfernt.",
+                    "VirtualService möglich, und welche sind explizit per AuthorizationPolicy(DENY) "
+                    "verboten (relation=\"forbidden\").",
     )
     parser.add_argument(
         "-n", "--namespace",
