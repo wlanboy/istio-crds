@@ -642,7 +642,10 @@ def main() -> int:
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
-        help="Aktiviert Debug-Logging, z. B. für übersprungene/nicht auflösbare Kanten.",
+        help="Aktiviert Debug-Logging, z. B. für übersprungene/nicht auflösbare Kanten. "
+             "Ohne dieses Flag werden bereits auf WARNING-Ebene z. B. nicht abrufbare CRDs "
+             "(RBAC/Version) und AuthorizationPolicies gemeldet, die sich keinem Deployment "
+             "bzw. keiner bestehenden Kante zuordnen ließen.",
     )
     args = parser.parse_args()
 
