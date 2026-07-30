@@ -323,29 +323,69 @@ def test_is_default_deny_policy_deny_with_only_meaningful_rules_is_not_default_d
     assert cg._is_default_deny_policy(ap) is False
 
 
+def test_is_default_deny_policy_selector_scoped_allow_without_rules_is_not_default_deny(cg):
+    # Nur die eine breite Namespace-/mesh-weite Baseline-Policy zählt als
+    # default-deny — eine auf ein einzelnes Workload gescopte Policy (auch
+    # ganz ohne Regeln) soll die unbedingte Erreichbarkeit NICHT einschränken.
+    ap = AuthorizationPolicyInfo(
+        name="scoped-empty", namespace="default", action="ALLOW", selector={"app": "httpbin"},
+    )
+    assert cg._is_default_deny_policy(ap) is False
+
+
+def test_is_default_deny_policy_target_ref_scoped_empty_deny_rule_is_not_default_deny(cg):
+    ap = AuthorizationPolicyInfo(
+        name="scoped-empty-deny", namespace="default", action="DENY",
+        target_refs=[TargetRef(kind="Service", name="httpbin")], rules=[AuthorizationRule()],
+    )
+    assert cg._is_default_deny_policy(ap) is False
+
+
 # ---------------------------------------------------------------------------
 # _default_deny_targets
 # ---------------------------------------------------------------------------
 
-def test_default_deny_targets_collects_deployments_matched_by_selector(cg):
+def test_default_deny_targets_collects_all_deployments_in_targeted_namespace(cg):
     deployments = [
         kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"}),
         kubectl.DeploymentInfo(name="sleep", namespace="default", labels={"app": "sleep"}),
+        kubectl.DeploymentInfo(name="other", namespace="other-ns", labels={"app": "other"}),
     ]
-    ap = AuthorizationPolicyInfo(
-        name="default-deny-httpbin", namespace="default", action="ALLOW", selector={"app": "httpbin"},
-    )
+    ap = AuthorizationPolicyInfo(name="default-deny", namespace="default", action="ALLOW")
     result = cg._default_deny_targets(
         [ap], deployments=deployments, services=[], mesh_root_namespace="istio-system",
     )
-    assert result == {"deployment:default/httpbin"}
+    assert result == {"deployment:default/httpbin", "deployment:default/sleep"}
+
+
+def test_default_deny_targets_mesh_root_namespace_applies_mesh_wide(cg):
+    deployments = [
+        kubectl.DeploymentInfo(name="a", namespace="default", labels={}),
+        kubectl.DeploymentInfo(name="b", namespace="other-ns", labels={}),
+    ]
+    ap = AuthorizationPolicyInfo(name="default-deny", namespace="istio-system", action="ALLOW")
+    result = cg._default_deny_targets(
+        [ap], deployments=deployments, services=[], mesh_root_namespace="istio-system",
+    )
+    assert result == {"deployment:default/a", "deployment:other-ns/b"}
 
 
 def test_default_deny_targets_ignores_policies_that_are_not_default_deny(cg):
     deployments = [kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"})]
     ap = AuthorizationPolicyInfo(
-        name="allow-httpbin", namespace="default", action="ALLOW", selector={"app": "httpbin"},
+        name="allow-httpbin", namespace="default", action="ALLOW",
         rules=[AuthorizationRule(from_namespaces=["default"])],
+    )
+    result = cg._default_deny_targets(
+        [ap], deployments=deployments, services=[], mesh_root_namespace="istio-system",
+    )
+    assert result == set()
+
+
+def test_default_deny_targets_ignores_workload_scoped_empty_policy(cg):
+    deployments = [kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"})]
+    ap = AuthorizationPolicyInfo(
+        name="scoped-empty", namespace="default", action="ALLOW", selector={"app": "httpbin"},
     )
     result = cg._default_deny_targets(
         [ap], deployments=deployments, services=[], mesh_root_namespace="istio-system",
@@ -520,7 +560,10 @@ def test_build_graph_default_deny_removes_unconditional_selects_edge(cg, monkeyp
     services = [kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"})]
     resources = IstioResources(
         authorization_policies=[AuthorizationPolicyInfo(
-            name="default-deny", namespace="default", action="ALLOW", selector={"app": "httpbin"},
+            # Ganz ohne Selector/targetRefs -> die eine namespace-weite
+            # "deny all"-Baseline-Policy, nicht auf ein einzelnes Workload
+            # gescopt.
+            name="default-deny", namespace="default", action="ALLOW",
         )],
     )
 
@@ -547,7 +590,8 @@ def test_build_graph_default_deny_with_matching_allow_rule_keeps_allowed_edge(cg
     resources = IstioResources(
         authorization_policies=[
             AuthorizationPolicyInfo(
-                name="default-deny", namespace="default", action="ALLOW", selector={"app": "httpbin"},
+                # Namespace-weite Baseline, kein Selector -> zählt als default-deny.
+                name="default-deny", namespace="default", action="ALLOW",
             ),
             AuthorizationPolicyInfo(
                 name="allow-sleep", namespace="default", action="ALLOW", selector={"app": "httpbin"},
@@ -573,8 +617,7 @@ def test_build_graph_default_deny_via_empty_deny_rule_removes_selects_edge(cg, m
     services = [kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"})]
     resources = IstioResources(
         authorization_policies=[AuthorizationPolicyInfo(
-            name="default-deny", namespace="default", action="DENY",
-            selector={"app": "httpbin"}, rules=[AuthorizationRule()],
+            name="default-deny", namespace="default", action="DENY", rules=[AuthorizationRule()],
         )],
     )
 
@@ -593,6 +636,33 @@ def test_build_graph_deny_noop_without_rules_keeps_unconditional_reachability(cg
     resources = IstioResources(
         authorization_policies=[AuthorizationPolicyInfo(
             name="deny-noop", namespace="default", action="DENY", selector={"app": "httpbin"},
+        )],
+    )
+
+    monkeypatch.setattr(cg, "get_mesh_root_namespace", lambda: "istio-system")
+    monkeypatch.setattr(cg, "get_deployments", lambda namespace=None: deployments)
+    monkeypatch.setattr(cg, "get_services", lambda namespace=None: services)
+    monkeypatch.setattr(cg, "get_istio_resources", lambda namespace=None: resources)
+
+    graph = cg.build_graph(namespace=None)
+    edge_triples = {(e["source"], e["target"], e["relation"]) for e in graph["edges"]}
+    assert ("service:default/httpbin", "deployment:default/httpbin", "selects") in edge_triples
+
+
+def test_build_graph_workload_scoped_empty_allow_does_not_remove_reachability(cg, monkeypatch):
+    # Regression: eine auf ein einzelnes Workload gescopte ALLOW-Policy ohne
+    # Regeln (ein verbreitetes "diesen Service sperren"-Muster) darf NICHT
+    # als default-deny-Baseline behandelt werden — sonst würde jede solche
+    # Policy im Cluster ihre eigene Erreichbarkeit tilgen und, in Summe über
+    # viele Services hinweg, den Graphen praktisch leerräumen.
+    deployments = [
+        kubectl.DeploymentInfo(name="sleep", namespace="default", labels={"app": "sleep"}, service_account="sleep"),
+        kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"}),
+    ]
+    services = [kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"})]
+    resources = IstioResources(
+        authorization_policies=[AuthorizationPolicyInfo(
+            name="scoped-empty", namespace="default", action="ALLOW", selector={"app": "httpbin"},
         )],
     )
 

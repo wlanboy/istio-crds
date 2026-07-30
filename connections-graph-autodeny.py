@@ -25,14 +25,21 @@ Modell
   der aufgelösten Quelle über die Policy zum betroffenen Deployment.
   Symmetrisch erzeugen AuthorizationPolicy(ALLOW)-Regeln mit tatsächlichem
   Inhalt Kanten mit relation="allowed".
-- Ein Deployment gilt als "default-deny geschützt", wenn eine
-  AuthorizationPolicy(ALLOW) ganz ohne Regeln darauf zielt (das offizielle
-  Istio-Muster für "alles verbieten": ohne Regel matcht nichts, also ist
-  nichts erlaubt) oder eine AuthorizationPolicy(DENY) mit mindestens einer
-  komplett leeren Regel (matcht alles, verbietet also alles). Für solche
-  Deployments werden die sonst unbedingt geltenden Erreichbarkeits-Kanten
-  (service "selects", serviceentry "resolves_to") aus dem Graphen entfernt —
-  übrig bleiben nur noch explizite "allowed"-Kanten (aus einer passenden
+- Ein Deployment gilt als "default-deny geschützt", wenn es von der einen
+  breiten "deny all"-Baseline-Policy erfasst wird, die üblicherweise pro
+  Namespace (oder mesh-weit im Root-Namespace) angelegt wird: einer
+  AuthorizationPolicy ganz ohne Selector/targetRefs, die entweder als ALLOW
+  ganz ohne Regeln (das offizielle Istio-Muster für "alles verbieten": ohne
+  Regel matcht nichts, also ist nichts erlaubt) oder als DENY mit mindestens
+  einer komplett leeren Regel (matcht alles, verbietet also alles) vorliegt.
+  Gezielt auf einzelne Workloads gescopte Policies (mit Selector/targetRefs)
+  zählen bewusst NICHT als default-deny, auch wenn ihre Regeln leer
+  erscheinen — u. a. weil ``AuthorizationRule`` nur from/to.hosts abbildet
+  und eine Regel, die z. B. nur nach HTTP-Methode/Pfad einschränkt, sonst
+  fälschlich als "leer" durchginge. Für default-deny geschützte Deployments
+  werden die sonst unbedingt geltenden Erreichbarkeits-Kanten (service
+  "selects", serviceentry "resolves_to") aus dem Graphen entfernt — übrig
+  bleiben nur noch explizite "allowed"-Kanten (aus einer passenden
   ALLOW-Regel) sowie "forbidden"-Kanten aus einer NICHT-default-deny
   DENY-Regel. Ohne passende ALLOW-Regel ist ein solches Deployment im
   Graphen dadurch isoliert (keine eingehenden Kanten mehr) — das bildet ab,
@@ -315,12 +322,24 @@ def _resolve_rule_sources(rule: AuthorizationRule, deployments: list[DeploymentI
 
 
 def _is_default_deny_policy(ap: AuthorizationPolicyInfo) -> bool:
-    """Erkennt die beiden gängigen Istio-Muster für "alles verbieten": eine
+    """Erkennt die eine "deny all"-Baseline-Policy, die pro Namespace bzw.
+    mesh-weit üblich ist: eine Policy ganz ohne Selector/targetRefs (gilt für
+    den gesamten Namespace, oder mesh-weit, falls sie im Root-Namespace
+    liegt — siehe ``_authz_policy_targets``), und zusätzlich entweder eine
     ALLOW-Policy ganz ohne Regeln (nichts matcht, also ist nichts erlaubt —
     das offizielle Istio-Muster für default-deny) oder eine DENY-Policy mit
     mindestens einer komplett leeren Regel (matcht alles, verbietet also
-    alles). Eine DENY-Policy ganz ohne Regeln ist dagegen ein No-op (nichts
-    matcht, also wird auch nichts verboten) und zählt hier nicht."""
+    alles). Eine gezielt auf einzelne Workloads gescopte Policy (mit
+    Selector/targetRefs) zählt bewusst NICHT als default-deny — nur die eine
+    breite Baseline-Policy soll die sonst unbedingte Erreichbarkeit
+    einschränken, nicht jede einzelne, ggf. nur unvollständig geparste
+    Workload-Regel (z. B. eine Regel, die nur nach HTTP-Methode/Pfad
+    einschränkt — das bildet ``AuthorizationRule`` nicht ab und würde sonst
+    fälschlich als "leer" durchgehen). Eine DENY-Policy ganz ohne Regeln ist
+    außerdem ein No-op (nichts matcht, also wird auch nichts verboten) und
+    zählt hier ebenfalls nicht."""
+    if ap.has_selector:
+        return False
     if ap.action == "ALLOW":
         return not ap.rules
     if ap.action == "DENY":
