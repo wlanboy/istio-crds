@@ -60,8 +60,6 @@ zusätzlichen Abgleich der exponierten Hosts.
 Eine wichtige Designentscheidung:
 ALLOW-AuthorizationPolicies fließen gar nicht in den Graphen ein, weder als Filter noch als Knoten. 
 Grund: 
-Eine Menge erlaubter Aufrufer zu berechnen würde zwangsläufig alle impliziten Verbote sichtbar machen 
-(genau das, was laut Vorgabe nicht gezeigt werden soll). 
 Falls doch explizite ALLOW-Listen die "möglich"-Kanten einschränken (nur eben ohne die implizite Restmenge zu zeigen), 
 lässt sich das nachrüsten, ist aber pro Ziel-Deployment nicht immer eindeutig graphdarstellbar, 
 wenn ein Service mehrere Deployments mit unterschiedlichen Policies bedient.
@@ -153,17 +151,24 @@ class GraphBuilder:
 
     def annotate_incoming_edges(
         self, target: str, relations: tuple[str, ...], key: str, value: object,
-    ) -> None:
+    ) -> int:
         """Hängt ``value`` an das ``key``-Attribut (eine Liste) jeder bereits
         bestehenden Kante mit dem gegebenen Ziel und einer der gegebenen
         Relationen an. Erzeugt bewusst keine neue Kante/Knoten und entfernt
-        keine bestehende — rein additive Beschriftung."""
+        keine bestehende — rein additive Beschriftung. Gibt die Anzahl der
+        tatsächlich annotierten Kanten zurück, damit Aufrufer erkennen können,
+        ob überhaupt eine passende Kante existierte (z. B. um per Debug-Log
+        sichtbar zu machen, warum eine an sich zutreffende Policy zu keinem
+        Label führt)."""
+        count = 0
         for edge in self._edges.values():
             if edge.target != target or edge.relation not in relations:
                 continue
             values = edge.attributes.setdefault(key, [])
             if value not in values:
                 values.append(value)
+            count += 1
+        return count
 
     def build(self) -> dict[str, object]:
         # Rückwärts-Fixpunkt: ein Knoten "kann ein Deployment erreichen", wenn
@@ -443,6 +448,12 @@ def _add_deny_policy_labels(
             ap, deployments=deployments, services=services, mesh_root_namespace=mesh_root_namespace,
         )
         if not targets:
+            logger.debug(
+                "AuthorizationPolicy(%s) %s/%s betrifft laut Selector/targetRefs/Namespace kein "
+                "geladenes Deployment - kein deny_policies-Label (Selector/targetRefs prüfen, oder "
+                "ob das Deployment überhaupt im abgefragten Namespace-Scope geladen wurde)",
+                ap.action, ap.namespace, ap.name,
+            )
             continue
         policy_label = {
             "name": ap.name,
@@ -460,7 +471,16 @@ def _add_deny_policy_labels(
         }
         for target in targets:
             target_id = f"deployment:{target.namespace}/{target.name}"
-            g.annotate_incoming_edges(target_id, ("selects", "resolves_to"), "deny_policies", policy_label)
+            annotated = g.annotate_incoming_edges(
+                target_id, ("selects", "resolves_to"), "deny_policies", policy_label,
+            )
+            if annotated == 0:
+                logger.debug(
+                    "AuthorizationPolicy(%s) %s/%s betrifft Deployment %s, aber dafür existiert keine "
+                    "selects/resolves_to-Kante im Graphen (kein Service selektiert es?) - kein "
+                    "deny_policies-Label möglich",
+                    ap.action, ap.namespace, ap.name, target_id,
+                )
 
 
 # ---------------------------------------------------------------------------
