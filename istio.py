@@ -536,7 +536,12 @@ def _served_version(ext: client.ApiextensionsV1Api, crd_name: str) -> str | None
             ext.read_custom_resource_definition(crd_name, _request_timeout=_REQUEST_TIMEOUT),
         )
     except (ApiException, urllib3.exceptions.HTTPError) as e:
-        logger.debug("CRD %s not available: %s", crd_name, e)
+        # WARNING statt DEBUG: ein 403 hier bedeutet meist, dass der Service
+        # Account zwar die konkreten Custom Resources lesen darf, aber nicht
+        # die (cluster-weite) CustomResourceDefinition selbst - dann liefert
+        # _fetch für den betroffenen CRD-Typ still eine leere Liste, ohne dass
+        # das sonst irgendwo auffällt.
+        logger.warning("CRD %s not available: %s", crd_name, e)
         return None
     served = [v for v in ((crd.spec.versions if crd.spec else None) or []) if v.served]
     storage = next((v.name for v in served if v.storage), None)
@@ -553,7 +558,7 @@ def _fetch(
     try:
         resp = _custom_list(custom, group=group, version=version, namespace=namespace, plural=plural)
     except (ApiException, urllib3.exceptions.HTTPError) as e:
-        logger.debug("Failed to list %s/%s %s: %s", group, version, plural, e)
+        logger.warning("Failed to list %s/%s %s: %s", group, version, plural, e)
         return []
     return [parser(item) for item in resp.get("items", [])]
 
