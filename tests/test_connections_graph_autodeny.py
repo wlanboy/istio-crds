@@ -414,6 +414,8 @@ def test_add_deny_policy_labels_annotates_existing_selects_edge(cg):
     assert edge["attributes"]["deny_policies"] == [{
         "name": "deny-sleep",
         "namespace": "default",
+        "action": "DENY",
+        "implicit_deny_all": False,
         "rules": [{"from_namespaces": [], "from_principals": ["cluster.local/ns/default/sa/sleep"], "to_hosts": []}],
     }]
 
@@ -444,8 +446,69 @@ def test_add_deny_policy_labels_does_not_skip_default_deny_style_empty_rule(cg):
     assert edge["attributes"]["deny_policies"] == [{
         "name": "default-deny",
         "namespace": "default",
+        "action": "DENY",
+        "implicit_deny_all": False,
         "rules": [{"from_namespaces": [], "from_principals": [], "to_hosts": []}],
     }]
+
+
+def test_add_deny_policy_labels_covers_official_istio_allow_shaped_deny_all(cg):
+    # Das offizielle Istio-Muster für "alles verbieten" ist KEINE
+    # action=DENY-Policy, sondern eine ALLOW-Policy ganz ohne Regeln
+    # (spec: {} -> action fehlt, defaultet laut istio.py auf "ALLOW", rules
+    # ist eine leere Liste). Ohne jede Regel matcht nichts, also ist nichts
+    # erlaubt -> de facto ein Verbot. Genau dieses Cluster-übliche Muster war
+    # der eigentliche Bug: es wurde bisher als action != "DENY" komplett
+    # übersprungen.
+    g = cg.GraphBuilder()
+    deployments = [kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"})]
+    services = [kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"})]
+    g.add_node("deployment", "httpbin", "default")
+    g.add_node("service", "httpbin", "default")
+    g.add_edge("service:default/httpbin", "deployment:default/httpbin", "selects")
+    ap = AuthorizationPolicyInfo(name="deny-all", namespace="default", action="ALLOW")
+    cg._add_deny_policy_labels(
+        g, authorization_policies=[ap], deployments=deployments, services=services,
+        mesh_root_namespace="istio-system",
+    )
+    graph = g.build()
+    edge = next(
+        e for e in graph["edges"]
+        if e["source"] == "service:default/httpbin" and e["target"] == "deployment:default/httpbin"
+    )
+    assert edge["attributes"]["deny_policies"] == [{
+        "name": "deny-all",
+        "namespace": "default",
+        "action": "ALLOW",
+        "implicit_deny_all": True,
+        "rules": [],
+    }]
+
+
+def test_add_deny_policy_labels_ignores_allow_with_meaningful_rules(cg):
+    # Gegenprobe: eine ALLOW-Policy MIT tatsächlichem Regelinhalt ist eine
+    # echte Erlaubnis, kein implizites Verbot -> gehört nicht zu deny_policies
+    # (die gehört zu allow_policies, siehe _add_allow_policy_labels).
+    g = cg.GraphBuilder()
+    deployments = [kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"})]
+    services = [kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"})]
+    g.add_node("deployment", "httpbin", "default")
+    g.add_node("service", "httpbin", "default")
+    g.add_edge("service:default/httpbin", "deployment:default/httpbin", "selects")
+    ap = AuthorizationPolicyInfo(
+        name="allow-sleep", namespace="default", action="ALLOW", selector={"app": "httpbin"},
+        rules=[AuthorizationRule(from_namespaces=["default"])],
+    )
+    cg._add_deny_policy_labels(
+        g, authorization_policies=[ap], deployments=deployments, services=services,
+        mesh_root_namespace="istio-system",
+    )
+    graph = g.build()
+    edge = next(
+        e for e in graph["edges"]
+        if e["source"] == "service:default/httpbin" and e["target"] == "deployment:default/httpbin"
+    )
+    assert "deny_policies" not in edge["attributes"]
 
 
 def test_add_deny_policy_labels_does_not_add_edges_or_nodes(cg):
@@ -486,6 +549,74 @@ def test_add_deny_policy_labels_ignores_allow_policies(cg):
         if e["source"] == "service:default/httpbin" and e["target"] == "deployment:default/httpbin"
     )
     assert "deny_policies" not in edge["attributes"]
+
+
+def test_add_deny_policy_labels_covers_namespace_wide_auto_deny_all_baseline(cg):
+    # Die "echte" Auto-Deny-All-Baseline: ganz ohne Selector/targetRefs und
+    # ganz ohne Regeln (kein einzelner leerer Regel-Eintrag, sondern gar
+    # keiner) -> gilt laut _authz_policy_targets für den gesamten Namespace.
+    # Genau dieser Fall darf beim Labeln nicht verloren gehen.
+    g = cg.GraphBuilder()
+    deployments = [
+        kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"}),
+        kubectl.DeploymentInfo(name="sleep", namespace="default", labels={"app": "sleep"}),
+        kubectl.DeploymentInfo(name="other", namespace="other-ns", labels={"app": "other"}),
+    ]
+    services = [
+        kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"}),
+        kubectl.ServiceInfo(name="sleep", namespace="default", selector={"app": "sleep"}),
+        kubectl.ServiceInfo(name="other", namespace="other-ns", selector={"app": "other"}),
+    ]
+    for d in deployments:
+        g.add_node("deployment", d.name, d.namespace)
+    for s in services:
+        g.add_node("service", s.name, s.namespace)
+        g.add_edge(f"service:{s.namespace}/{s.name}", f"deployment:{s.namespace}/{s.name}", "selects")
+
+    # action="ALLOW" ohne Regeln, wie es istio.py für spec: {} (kein
+    # action-Feld) tatsächlich liefert -> das reale Cluster-Muster.
+    ap = AuthorizationPolicyInfo(name="default-deny-all", namespace="default", action="ALLOW")
+    cg._add_deny_policy_labels(
+        g, authorization_policies=[ap], deployments=deployments, services=services,
+        mesh_root_namespace="istio-system",
+    )
+    graph = g.build()
+    labeled_targets = {
+        e["target"] for e in graph["edges"] if "deny_policies" in e["attributes"]
+    }
+    assert labeled_targets == {"deployment:default/httpbin", "deployment:default/sleep"}
+    other_edge = next(e for e in graph["edges"] if e["target"] == "deployment:other-ns/other")
+    assert "deny_policies" not in other_edge["attributes"]
+
+
+def test_add_deny_policy_labels_covers_mesh_wide_auto_deny_all_baseline(cg):
+    # Dieselbe Baseline im Root-Namespace gilt laut _authz_policy_targets
+    # mesh-weit für alle Deployments in allen Namespaces.
+    g = cg.GraphBuilder()
+    deployments = [
+        kubectl.DeploymentInfo(name="httpbin", namespace="default", labels={"app": "httpbin"}),
+        kubectl.DeploymentInfo(name="other", namespace="other-ns", labels={"app": "other"}),
+    ]
+    services = [
+        kubectl.ServiceInfo(name="httpbin", namespace="default", selector={"app": "httpbin"}),
+        kubectl.ServiceInfo(name="other", namespace="other-ns", selector={"app": "other"}),
+    ]
+    for d in deployments:
+        g.add_node("deployment", d.name, d.namespace)
+    for s in services:
+        g.add_node("service", s.name, s.namespace)
+        g.add_edge(f"service:{s.namespace}/{s.name}", f"deployment:{s.namespace}/{s.name}", "selects")
+
+    ap = AuthorizationPolicyInfo(name="default-deny-all", namespace="istio-system", action="ALLOW")
+    cg._add_deny_policy_labels(
+        g, authorization_policies=[ap], deployments=deployments, services=services,
+        mesh_root_namespace="istio-system",
+    )
+    graph = g.build()
+    labeled_targets = {
+        e["target"] for e in graph["edges"] if "deny_policies" in e["attributes"]
+    }
+    assert labeled_targets == {"deployment:default/httpbin", "deployment:other-ns/other"}
 
 
 # ---------------------------------------------------------------------------

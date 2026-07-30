@@ -36,12 +36,16 @@ Modell
   komplett leere Regel (das "default-deny"-Muster: eine Policy ohne jede
   Einschränkung) wird ignoriert und erzeugt keine Kante — dieses Filter-
   verhalten bleibt unverändert. Zusätzlich (und unabhängig davon) wird JEDE
-  AuthorizationPolicy(DENY), die ein Deployment betrifft — auch mit einer
-  völlig leeren "default-deny"-Regel, die für die "forbidden"-Kante oben
-  ignoriert wird —, rein informativ als ``deny_policies``-Attribut an den
-  bestehenden ``selects``/``resolves_to``-Kanten in dieses Deployment
-  vermerkt. Auch das entfernt oder erzeugt keine Kante; es macht nur
-  sichtbar, dass/unter welcher Policy ein Deployment überhaupt steht.
+  Policy, die ein Deployment de facto verbietet, rein informativ als
+  ``deny_policies``-Attribut an den bestehenden ``selects``/``resolves_to``-
+  Kanten in dieses Deployment vermerkt — auch mit einer völlig leeren
+  "default-deny"-Regel, die für die "forbidden"-Kante oben ignoriert wird.
+  Das umfasst explizit auch das offizielle Istio-Muster für ein pauschales
+  Verbot: eine ALLOW-Policy ganz ohne Regeln (z. B. ``spec: {}``) — ohne
+  Regel matcht nichts, also ist nichts erlaubt (siehe
+  ``_is_implicit_deny_all``). Auch das entfernt oder erzeugt keine Kante; es
+  macht nur sichtbar, dass/unter welcher Policy ein Deployment überhaupt
+  steht.
 - ServiceAccounts sind kein eigener Knoten mehr, sondern ein Attribut
   (``service_account``) direkt am jeweiligen Deployment-Knoten.
 
@@ -399,22 +403,41 @@ def _add_allow_policy_labels(
 # AuthorizationPolicy(DENY) -> rein informatives Kanten-Label
 # ---------------------------------------------------------------------------
 
+def _is_implicit_deny_all(ap: AuthorizationPolicyInfo) -> bool:
+    """Erkennt das offizielle Istio-Muster für ein pauschales Verbot über eine
+    ALLOW-Policy ganz ohne Regeln (z. B. ``spec: {}``, kein ``action``-Feld
+    -> Default "ALLOW", kein ``rules`` -> leere Liste): ohne jede Regel
+    matcht nichts, also ist nichts erlaubt — de facto ein Verbot für alle von
+    dieser Policy betroffenen Deployments, unabhängig vom Scope
+    (Selector/targetRefs). Wichtig: ``not ap.rules`` prüft, dass die Regel-
+    Liste selbst komplett leer ist (kein einziger Regel-Eintrag) — das ist
+    eindeutig, im Unterschied zu einem einzelnen Regel-Eintrag ohne
+    from/to-Inhalt (der matcht alles und würde bei ALLOW gerade das
+    Gegenteil, ein Erlauben von allem, bedeuten)."""
+    return ap.action == "ALLOW" and not ap.rules
+
+
 def _add_deny_policy_labels(
     g: GraphBuilder, *, authorization_policies: list[AuthorizationPolicyInfo],
     deployments: list[DeploymentInfo], services: list[ServiceInfo], mesh_root_namespace: str,
 ) -> None:
     """Beschriftet bereits bestehende Kanten, die auf ein Deployment zeigen
-    (``selects``/``resolves_to``), zusätzlich mit den AuthorizationPolicy(DENY)
-    -Regeln, die dieses Deployment betreffen — im Unterschied zu
+    (``selects``/``resolves_to``), zusätzlich mit den AuthorizationPolicy-
+    Regeln, die dieses Deployment de facto verbieten — im Unterschied zu
     ``_add_forbidden_edges`` OHNE die "default-deny"-Regel (eine komplett
     leere Regel, oder auch gar keine Regel) zu überspringen: hier soll
-    sichtbar bleiben, dass/warum ein Deployment überhaupt unter einer DENY-
-    Policy steht, selbst wenn diese (noch) keine konkrete Quelle benennt. Rein
-    informativ: es werden keine Kanten entfernt oder neu erzeugt, das
-    bestehende Filterverhalten von ``_add_forbidden_edges`` bleibt
-    unverändert."""
+    sichtbar bleiben, dass/warum ein Deployment überhaupt unter einem Verbot
+    steht, selbst wenn dieses (noch) keine konkrete Quelle benennt. Das
+    umfasst neben ``action: DENY`` auch das offizielle Istio-"deny-all"-
+    Muster: eine ALLOW-Policy ganz ohne Regeln (siehe
+    ``_is_implicit_deny_all``) — sonst würde ausgerechnet die im Cluster
+    übliche Baseline-Policy (meist ohne explizites ``action: DENY``) beim
+    Labeln unsichtbar bleiben. Rein informativ: es werden keine Kanten
+    entfernt oder neu erzeugt, das bestehende Filterverhalten von
+    ``_add_forbidden_edges`` bleibt unverändert."""
     for ap in authorization_policies:
-        if ap.action != "DENY":
+        implicit_deny_all = _is_implicit_deny_all(ap)
+        if ap.action != "DENY" and not implicit_deny_all:
             continue
         targets = _authz_policy_targets(
             ap, deployments=deployments, services=services, mesh_root_namespace=mesh_root_namespace,
@@ -424,6 +447,8 @@ def _add_deny_policy_labels(
         policy_label = {
             "name": ap.name,
             "namespace": ap.namespace,
+            "action": ap.action,
+            "implicit_deny_all": implicit_deny_all,
             "rules": [
                 {
                     "from_namespaces": r.from_namespaces,
